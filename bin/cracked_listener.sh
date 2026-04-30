@@ -91,7 +91,7 @@ while true; do
                 DIRECTION=$(awk -v live="$LIVE_PRICE" -v target="$TARGET_PRICE" 'BEGIN { if (live < target) print "CROSSING_UP"; else print "CROSSING_DOWN" }')
                 
                 # Generate a short 4-character alphanumeric ID
-                ALERT_ID=$(cat /dev/urandom | tr -dc 'A-Z0-9' | fold -w 4 | head -n 1)
+                ALERT_ID=$(head -c 100 /dev/urandom | tr -dc 'A-Z0-9' | head -c 4)
 
                 # Write to flat database (TSV format)
                 echo -e "${ALERT_ID}\t${CHAT_ID}\t${SYMBOL}\t${TARGET_PRICE}\t${DIRECTION}\t${MSG}" >> "$DB_FILE"
