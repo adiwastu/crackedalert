@@ -1,0 +1,18 @@
+[Unit]
+Description=Cracked Alert System - Telegram Listener
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/cracked_listener.sh
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cracked-listener
+
+[Install]
+WantedBy=multi-user.target
