@@ -96,7 +96,22 @@ while true; do
                 echo -e "${ALERT_ID}\t${CHAT_ID}\t${SYMBOL}\t${TARGET_PRICE}\t${DIRECTION}\t${MSG}" >> "$DB_FILE"
 
                 # Confirm to user
-                send_msg "$CHAT_ID" "✅ <b>Cracked Alert Locked</b>\nID: <code>$ALERT_ID</code>\nTarget: $SYMBOL @ $TARGET_PRICE\nDirection: $DIRECTION\nCurrent: $LIVE_PRICE"
+                # Determine higher/lower relation for the message
+                if [ "$DIRECTION" == "CROSSING_UP" ]; then
+                    RELATION="lower"
+                else
+                    RELATION="higher"
+                fi
+
+                # Confirm to user using a multi-line string
+                CONFIRM_MSG="cracked alert set (id: ${ALERT_ID}).
+                ${SYMBOL}
+                ${TARGET_PRICE}
+
+                Notes: ${MSG}
+                current price (${LIVE_PRICE}) is now ${RELATION} than target."
+
+                send_msg "$CHAT_ID" "$CONFIRM_MSG"
                 echo "Logged Alert: $ALERT_ID | $SYMBOL | $TARGET_PRICE | $DIRECTION"
 
             # Command: /alerts (List active)
