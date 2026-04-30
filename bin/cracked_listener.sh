@@ -42,6 +42,8 @@ while true; do
 
     # Fetch updates with a 100-second timeout to hold the connection open
     UPDATES=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" \
+        -d "offset=${OFFSET}" \
+        -d "timeout=100")
 
     # Check if we got a valid JSON response with updates
     HAS_UPDATES=$(echo "$UPDATES" | jq -r '.ok')
@@ -63,7 +65,6 @@ while true; do
             # Command: /alert
             if [[ "$RAW_TEXT" == /alert* ]]; then
                 # Parse arguments: /alert <PRICE> [SYMBOL] [MESSAGE]
-                # If symbol is omitted, defaults to XAUUSD.
                 read -r CMD TARGET_PRICE SYMBOL MSG <<< "$RAW_TEXT"
                 
                 # Validation
@@ -88,7 +89,7 @@ while true; do
                 # Determine direction using awk for floating point math
                 DIRECTION=$(awk -v live="$LIVE_PRICE" -v target="$TARGET_PRICE" 'BEGIN { if (live < target) print "CROSSING_UP"; else print "CROSSING_DOWN" }')
                 
-                # Generate a short 4-character alphanumeric ID
+                # Generate a short 4-character alphanumeric ID safely (CPU leak patched)
                 ALERT_ID=$(head -c 100 /dev/urandom | tr -dc 'A-Z0-9' | head -c 4)
 
                 # Write to flat database (TSV format)
