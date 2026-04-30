@@ -22,10 +22,6 @@ else
     exit 1
 fi
 
-# Initialize offset
-OFFSET=$(cat "$OFFSET_FILE" 2>/dev/null)
-[ -z "$OFFSET" ] && OFFSET=0
-
 # --- HELPER: SEND TELEGRAM MESSAGE ---
 send_msg() {
     local CHAT_ID="$1"
@@ -40,10 +36,12 @@ echo "[Cracked Listener] Started. Polling Telegram..."
 
 # --- MAIN LONG-POLLING LOOP ---
 while true; do
+    # 1. ALWAYS force read the latest offset from disk before calling Telegram
+    OFFSET=$(cat "$OFFSET_FILE" 2>/dev/null)
+    [ -z "$OFFSET" ] && OFFSET=0
+
     # Fetch updates with a 100-second timeout to hold the connection open
     UPDATES=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" \
-        -d "offset=${OFFSET}" \
-        -d "timeout=100")
 
     # Check if we got a valid JSON response with updates
     HAS_UPDATES=$(echo "$UPDATES" | jq -r '.ok')
