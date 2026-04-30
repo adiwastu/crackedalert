@@ -103,29 +103,36 @@ while true; do
                     RELATION="higher"
                 fi
 
-                # Confirm to user using a multi-line string
+# Confirm to user using a multi-line string
                 CONFIRM_MSG="cracked alert set (id: ${ALERT_ID}).
-                ${SYMBOL}
-                ${TARGET_PRICE}
+${SYMBOL}
+${TARGET_PRICE}
 
-                Notes: ${MSG}
-                current price (${LIVE_PRICE}) is now ${RELATION} than target."
+Notes: ${MSG}
+current price (${LIVE_PRICE}) is now ${RELATION} than target."
 
                 send_msg "$CHAT_ID" "$CONFIRM_MSG"
                 echo "Logged Alert: $ALERT_ID | $SYMBOL | $TARGET_PRICE | $DIRECTION"
 
             # Command: /alerts (List active)
+# Command: /list (List active)
             elif [[ "$RAW_TEXT" == /list* ]]; then
                 ACTIVE_COUNT=$(grep -c "^[A-Z0-9].*${CHAT_ID}" "$DB_FILE" 2>/dev/null || echo "0")
                 if [ "$ACTIVE_COUNT" -eq 0 ]; then
-                    send_msg "$CHAT_ID" "No active alerts."
+                    send_msg "$CHAT_ID" "no active alerts."
                 else
-                    LIST_MSG="<b>Active Cracked Alerts:</b>\n\n"
+                    # Start the message
+                    LIST_MSG="active alerts:"
+                    
+                    # Read DB and append with literal line breaks
                     while IFS=$'\t' read -r ID C_ID SYM TGT DIR C_MSG; do
                         if [ "$C_ID" == "$CHAT_ID" ]; then
-                            LIST_MSG+="• <code>$ID</code>: $SYM @ $TGT ($DIR)\n"
+                            LIST_MSG="${LIST_MSG}
+(${ID})  ${SYM} @ ${TGT} (${DIR})"
                         fi
                     done < "$DB_FILE"
+                    
+                    # Send final message
                     send_msg "$CHAT_ID" "$LIST_MSG"
                 fi
 
