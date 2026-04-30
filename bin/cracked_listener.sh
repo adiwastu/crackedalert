@@ -115,7 +115,7 @@ while true; do
                 echo "Logged Alert: $ALERT_ID | $SYMBOL | $TARGET_PRICE | $DIRECTION"
 
             # Command: /alerts (List active)
-            elif [[ "$RAW_TEXT" == /alerts* ]]; then
+            elif [[ "$RAW_TEXT" == /list* ]]; then
                 ACTIVE_COUNT=$(grep -c "^[A-Z0-9].*${CHAT_ID}" "$DB_FILE" 2>/dev/null || echo "0")
                 if [ "$ACTIVE_COUNT" -eq 0 ]; then
                     send_msg "$CHAT_ID" "No active alerts."
