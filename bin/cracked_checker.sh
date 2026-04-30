@@ -73,12 +73,10 @@ while true; do
             if [ "$IS_TRIGGERED" == "YES" ]; then
                 echo "🔥 TRIGGERED: $ID | $SYM crossed $TARGET (Live: $LIVE_PRICE)"
                 
-                # Format the alert payload
-                ALERT_TEXT="🚨 <b>CRACKED ALERT TRIGGERED</b> 🚨\n\n"
-                ALERT_TEXT+="<b>Symbol:</b> $SYM\n"
-                ALERT_TEXT+="<b>Target:</b> $TARGET\n"
-                ALERT_TEXT+="<b>Live Price:</b> $LIVE_PRICE\n"
-                ALERT_TEXT+="<b>Note:</b> $MSG"
+# Format the alert payload using a multi-line string
+ALERT_TEXT="cracked alert hit! (id:${ID})
+price hits ${TARGET}.
+notes: ${MSG}"
 
                 # Fire to Telegram
                 send_msg "$CHAT_ID" "$ALERT_TEXT"
