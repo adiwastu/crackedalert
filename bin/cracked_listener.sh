@@ -136,20 +136,23 @@ current price (${LIVE_PRICE}) is now ${RELATION} than target."
                     send_msg "$CHAT_ID" "$LIST_MSG"
                 fi
 
-            # Command: /cancel
+# Command: /cancel
             elif [[ "$RAW_TEXT" == /cancel* ]]; then
                 DEL_ID=$(echo "$RAW_TEXT" | awk '{print $2}')
                 if [ -z "$DEL_ID" ]; then
-                    send_msg "$CHAT_ID" "⚠️ <b>Usage:</b> /cancel <ID>"
+                    send_msg "$CHAT_ID" "⚠️ Usage: /cancel <ID>"
                     continue
                 fi
 
-                # Delete safely using sed in-place
-                if grep -q "^${DEL_ID}\t${CHAT_ID}" "$DB_FILE"; then
-                    sed -i "/^${DEL_ID}\t${CHAT_ID}/d" "$DB_FILE"
-                    send_msg "$CHAT_ID" "🗑️ Alert <code>$DEL_ID</code> cancelled."
+                # Use Bash ANSI-C quoting to pass a literal, invisible tab character
+                TAB=$'\t'
+                
+                # Check and Delete
+                if grep -q "^${DEL_ID}${TAB}${CHAT_ID}" "$DB_FILE"; then
+                    sed -i "/^${DEL_ID}${TAB}${CHAT_ID}/d" "$DB_FILE"
+                    send_msg "$CHAT_ID" "alert ${DEL_ID} cancelled."
                 else
-                    send_msg "$CHAT_ID" "❌ ID <code>$DEL_ID</code> not found or doesn't belong to you."
+                    send_msg "$CHAT_ID" "id ${DEL_ID} not found or doesn't belong to you."
                 fi
             fi
         done
