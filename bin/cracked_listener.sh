@@ -114,7 +114,6 @@ current price (${LIVE_PRICE}) is now ${RELATION} than target."
                 send_msg "$CHAT_ID" "$CONFIRM_MSG"
                 echo "Logged Alert: $ALERT_ID | $SYMBOL | $TARGET_PRICE | $DIRECTION"
 
-            # Command: /alerts (List active)
 # Command: /list (List active)
             elif [[ "$RAW_TEXT" == /list* ]]; then
                 ACTIVE_COUNT=$(grep -c "^[A-Z0-9].*${CHAT_ID}" "$DB_FILE" 2>/dev/null || echo "0")
@@ -128,7 +127,7 @@ current price (${LIVE_PRICE}) is now ${RELATION} than target."
                     while IFS=$'\t' read -r ID C_ID SYM TGT DIR C_MSG; do
                         if [ "$C_ID" == "$CHAT_ID" ]; then
                             LIST_MSG="${LIST_MSG}
-(${ID})  ${SYM} @ ${TGT} (${DIR})"
+(${ID})  ${SYM} @ ${TGT} - ${C_MSG}"
                         fi
                     done < "$DB_FILE"
                     
