@@ -102,7 +102,7 @@ while true; do
                 fi
 
                 # Fetch Account Balance
-                BALANCE=$(curl -s "$BASE_URL/account" | jq -r '.balance')
+                BALANCE=$(curl -s "$BASE_URL/account" | jq -r '.data.balance')
                 if [ -z "$BALANCE" ] || [ "$BALANCE" == "null" ]; then
                     send_msg "$CHAT_ID" "error: could not fetch balance for ${ACCT}."
                     continue
