@@ -168,16 +168,23 @@ class CTraderClient:
                              self.environment)
                     await self._app_auth()
                     backoff = BACKOFF_START
-                    heartbeat = asyncio.get_running_loop().create_task(
-                        self._heartbeat())
+                    loop = asyncio.get_running_loop()
+                    heartbeat = loop.create_task(self._heartbeat())
+                    # The recv loop MUST be running before on_connected: that
+                    # callback issues requests (account auth, subscriptions)
+                    # whose responses only the recv loop can deliver. Starting
+                    # it afterwards deadlocks every request until it times out.
+                    receiver = loop.create_task(self._recv_loop(ws))
                     try:
                         if self._on_connected is not None:
-                            await self._on_connected()
+                            await self._with_receiver(
+                                self._on_connected(), receiver)
                         self._ready.set()
                         log.info("[%s] ready", self.environment)
-                        await self._recv_loop(ws)
+                        await receiver
                     finally:
                         heartbeat.cancel()
+                        receiver.cancel()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -192,6 +199,19 @@ class CTraderClient:
                          backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, BACKOFF_CAP)
+
+    @staticmethod
+    async def _with_receiver(setup_coro, receiver: asyncio.Task) -> None:
+        """Await setup work, but bail out immediately if the connection
+        dies underneath it instead of waiting for request timeouts."""
+        setup = asyncio.ensure_future(setup_coro)
+        done, _ = await asyncio.wait({setup, receiver},
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if receiver in done:
+            setup.cancel()
+            await receiver          # re-raise whatever killed the link
+            raise NotConnected("connection closed during setup")
+        await setup                 # propagate setup failures
 
     async def _app_auth(self) -> None:
         # Cannot use request(): recv loop is not running yet.
