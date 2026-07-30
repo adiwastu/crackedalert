@@ -1,0 +1,12 @@
+# secrets — never commit
+tokens.json
+.env
+.env_cracked
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/

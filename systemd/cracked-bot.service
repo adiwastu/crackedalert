@@ -1,0 +1,15 @@
+[Unit]
+Description=Cracked Alert v2 (cTrader Telegram bot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/crackedalert
+ExecStart=/opt/crackedalert/venv/bin/python -m crackedalert
+Restart=always
+RestartSec=5
+# journald picks up stdout/stderr; view with: journalctl -u cracked-bot -f
+
+[Install]
+WantedBy=multi-user.target

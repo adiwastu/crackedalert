@@ -108,13 +108,30 @@ while true; do
                     continue
                 fi
 
-                # Fetch Live Price
-                LIVE_PRICE=$(curl -s "$BASE_URL/fetch_data_pos?symbol=${SYMBOL}&timeframe=M1&num_bars=1" | jq -r '.[-1].close')
+                # Fetch Live Price (real-time tick for accurate bid/ask)
+                TICK_DATA=$(curl -s "$BASE_URL/symbol_info_tick/${SYMBOL}")
+                TICK_BID=$(echo "$TICK_DATA" | jq -r '.bid')
+                TICK_ASK=$(echo "$TICK_DATA" | jq -r '.ask')
+
+                if [ -z "$TICK_BID" ] || [ "$TICK_BID" == "null" ] || [ -z "$TICK_ASK" ] || [ "$TICK_ASK" == "null" ]; then
+                    send_msg "$CHAT_ID" "error: could not fetch live price for ${SYMBOL}."
+                    continue
+                fi
 
                 # Determine baseline entry for math
-                # If MARKET order, use live price as the math entry reference
+                # If MARKET order, use live tick price as the math entry reference.
+                # Direction is inferred first using mid-price, then the correct side (ask/bid) is used.
                 MATH_ENTRY=$TARGET_ENTRY
-                [ "$TARGET_ENTRY" == "MARKET" ] && MATH_ENTRY=$LIVE_PRICE
+                if [ "$TARGET_ENTRY" == "MARKET" ]; then
+                    # Use ask for BUY (where MT5 fills), bid for SELL.
+                    # We infer direction by comparing SL to the ask (conservative for BUY, sufficient for SELL).
+                    MID_PRICE=$(awk -v bid="$TICK_BID" -v ask="$TICK_ASK" 'BEGIN { printf "%.5f", (bid + ask) / 2 }')
+                    if (( $(echo "$TARGET_SL < $MID_PRICE" | bc -l) )); then
+                        MATH_ENTRY=$TICK_ASK
+                    else
+                        MATH_ENTRY=$TICK_BID
+                    fi
+                fi
 
                 # AWK Math Engine (Pure XAUUSD Logic)
                 # AWK is used here as an embedded arithmetic co-processor because
@@ -125,12 +142,12 @@ while true; do
                         # 1. Infer Direction
                         if (sl < entry) dir = "BUY"; else dir = "SELL";
                         
-                        # 2. XAUUSD SL Widening (3.00 absolute = 30 pips)
+                        # 2. XAUUSD SL Widening (1.00 absolute = 10 pips)
                         widen_text = "";
                         if (widen == "y" || widen == "Y") {
-                            if (dir == "BUY") sl = sl - 3.00;
-                            else sl = sl + 3.00;
-                            widen_text = " (tambah 30 pips)";
+                            if (dir == "BUY") sl = sl - 1.00;
+                            else sl = sl + 1.00;
+                            widen_text = " (tambah 10 pips)";
                         }
 
                         # 3. Distance & TP Calc
@@ -175,16 +192,27 @@ while true; do
                         --argjson tp "$EXEC_TP" \
                         '{symbol: $sym, type: $type, volume: $vol, sl: $sl, tp: $tp, magic: 777}')
                     ORDER_TYPE_LBL="MARKET"
+                    ENTRY_LBL="${MATH_ENTRY}"
                 else
+                    # Offset the pending order placement price by the live spread.
+                    # BUY: place slightly above target; SELL: slightly below.
+                    # SL/TP math already used the original TARGET_ENTRY above.
+                    SPREAD=$(awk -v ask="$TICK_ASK" -v bid="$TICK_BID" 'BEGIN { printf "%.2f", ask - bid }')
+                    if [ "$EXEC_DIR" == "BUY" ]; then
+                        ORDER_PRICE=$(awk -v entry="$TARGET_ENTRY" -v spread="$SPREAD" 'BEGIN { printf "%.2f", entry + spread }')
+                    else
+                        ORDER_PRICE=$(awk -v entry="$TARGET_ENTRY" -v spread="$SPREAD" 'BEGIN { printf "%.2f", entry - spread }')
+                    fi
                     JSON_PAYLOAD=$(jq -n \
                         --arg sym "$SYMBOL" \
                         --arg type "$EXEC_DIR" \
                         --argjson vol "$EXEC_LOTS" \
-                        --argjson price "$TARGET_ENTRY" \
+                        --argjson price "$ORDER_PRICE" \
                         --argjson sl "$EXEC_SL" \
                         --argjson tp "$EXEC_TP" \
                         '{symbol: $sym, type: $type, volume: $vol, price: $price, sl: $sl, tp: $tp, magic: 777}')
                     ORDER_TYPE_LBL="PENDING"
+                    ENTRY_LBL="${TARGET_ENTRY} (placed at ${ORDER_PRICE})"
                 fi
 
                 # Execute Order via POST
@@ -198,7 +226,7 @@ while true; do
 ${SYMBOL} - ${EXEC_DIR} ${ORDER_TYPE_LBL} (${ACCT})
 lots: ${EXEC_LOTS} (${RISK}% risk = \$${RISK_USD})
 
-entry: ${MATH_ENTRY}
+entry: ${ENTRY_LBL}
 sl: ${EXEC_SL}${WIDEN_LBL}
 tp: ${EXEC_TP} (1:${RR} RR)"
                     send_msg "$CHAT_ID" "$SUCCESS_MSG"
