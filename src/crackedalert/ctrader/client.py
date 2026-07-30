@@ -144,7 +144,13 @@ class CTraderClient:
                 "payloadType": payload_type,
                 "payload": payload,
             }))
-            return await asyncio.wait_for(fut, timeout)
+            try:
+                return await asyncio.wait_for(fut, timeout)
+            except asyncio.TimeoutError:
+                raise CTraderError(
+                    "TIMEOUT",
+                    "no response for payloadType %d within %.0fs"
+                    % (payload_type, timeout))
         finally:
             self._pending.pop(msg_id, None)
 
@@ -175,7 +181,8 @@ class CTraderClient:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                log.warning("[%s] connection lost: %s", self.environment, e)
+                log.warning("[%s] connection lost: %s: %s", self.environment,
+                           type(e).__name__, e or "(no message)")
             finally:
                 self._ready.clear()
                 self._ws = None
@@ -196,13 +203,21 @@ class CTraderClient:
                 "clientSecret": self._client_secret,
             },
         }))
-        deadline = asyncio.get_event_loop().time() + REQUEST_TIMEOUT
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + REQUEST_TIMEOUT
         while True:
-            remaining = deadline - asyncio.get_event_loop().time()
+            remaining = deadline - loop.time()
             if remaining <= 0:
-                raise CTraderError("TIMEOUT", "app auth timed out")
-            frame = json.loads(
-                await asyncio.wait_for(self._ws.recv(), remaining))
+                raise CTraderError(
+                    "TIMEOUT", "app auth timed out waiting for response")
+            try:
+                raw = await asyncio.wait_for(self._ws.recv(), remaining)
+            except asyncio.TimeoutError:
+                # bare TimeoutError has no message -- give it one so
+                # "connection lost" logs are diagnosable, not blank.
+                raise CTraderError(
+                    "TIMEOUT", "app auth timed out waiting for response")
+            frame = json.loads(raw)
             pt = frame.get("payloadType")
             if pt == PT_APPLICATION_AUTH_RES:
                 return

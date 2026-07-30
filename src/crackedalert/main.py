@@ -145,7 +145,13 @@ async def _run_bot(settings: Settings) -> None:
     refresh_task = asyncio.get_running_loop().create_task(
         tokens.refresh_loop(on_failure=on_token_failure))
 
-    for cli in clients.values():
+    # Stagger connection starts: firing both simultaneously was observed to
+    # make cTrader's app-auth response never arrive for either connection
+    # (both hang ~10s then time out, forever, in lockstep) -- opening them
+    # one at a time, as --smoke already does, avoids it.
+    for i, cli in enumerate(clients.values()):
+        if i > 0:
+            await asyncio.sleep(3.0)
         cli.start()
 
     stop = asyncio.Event()

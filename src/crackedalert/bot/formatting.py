@@ -67,10 +67,10 @@ def account_not_found(account: str) -> str:
 def help_text(account_codes: Iterable[str]) -> str:
     return ("cracked alert commands:\n\n"
             "market execution:\n"
-            "/m [sl] [widen:y/n] [rr] [risk%] [account]\n"
+            "/m [sl] [widen:y/n] [rr] [risk%%] [account]\n"
             "example: /m 2440.00 y 2 0.5 10k\n\n"
             "pending execution:\n"
-            "/p [entry] [sl] [widen:y/n] [rr] [risk%] [account]\n"
+            "/p [entry] [sl] [widen:y/n] [rr] [risk%%] [account]\n"
             "example: /p 2450.00 2455.00 n 3 1 5k\n\n"
             "set alert:\n"
             "/alert [target] [notes]\n"
