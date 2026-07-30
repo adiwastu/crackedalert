@@ -26,10 +26,32 @@ from .ctrader.trading import TradingService
 log = logging.getLogger("crackedalert.main")
 
 
-def _setup_logging() -> None:
+class _ConflictFilter(logging.Filter):
+    """Collapse Telegram's 409 Conflict traceback to a single actionable
+    line. It repeats every few seconds while two bots poll one token, and
+    the 30-line traceback buries everything else in the log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc_type = record.exc_info[0] if record.exc_info else None
+        if exc_type is not None and exc_type.__name__ == "Conflict":
+            record.exc_info = None
+            record.msg = ("Telegram 409: another bot instance is polling this "
+                          "token -- use bin/use_new.sh to switch cleanly")
+            record.args = ()
+        return True
+
+
+def _setup_logging(verbose: bool = False) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    if verbose:
+        return
+    # httpx logs every Telegram long-poll (~1 line/10s, forever) and puts
+    # the bot token in the URL; httpcore/websockets are chattier still.
+    for noisy in ("httpx", "httpcore", "websockets"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    logging.getLogger("telegram.ext.Updater").addFilter(_ConflictFilter())
 
 
 class FeedService:
@@ -222,11 +244,14 @@ async def _smoke(settings: Settings) -> int:
 
 
 def cli() -> None:
-    _setup_logging()
     parser = argparse.ArgumentParser(prog="crackedalert")
     parser.add_argument("--smoke", action="store_true",
                         help="connect, authenticate, print balances, exit")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="keep third-party HTTP/websocket logs (noisy; "
+                             "prints the bot token in Telegram URLs)")
     args = parser.parse_args()
+    _setup_logging(verbose=args.verbose)
 
     try:
         settings = load_settings()

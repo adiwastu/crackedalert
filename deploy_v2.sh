@@ -44,8 +44,9 @@ fi
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
 "$APP_DIR/venv/bin/pip" install --quiet "$REPO_DIR"
 
-# 4. Systemd unit
-echo "=> Installing systemd unit..."
+# 4. Launcher + systemd unit
+echo "=> Installing launcher and systemd unit..."
+install -m 755 "$REPO_DIR/bin/run_bot.sh" /usr/local/bin/crackedalert-run
 install -m 644 "$REPO_DIR/systemd/cracked-bot.service" /etc/systemd/system/
 systemctl daemon-reload
 

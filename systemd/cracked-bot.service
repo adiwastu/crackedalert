@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/crackedalert
-ExecStart=/opt/crackedalert/venv/bin/python -m crackedalert
+# Wrapper picks the production venv if present, else the dev one.
+ExecStart=/usr/local/bin/crackedalert-run
 Restart=always
 RestartSec=5
 # journald picks up stdout/stderr; view with: journalctl -u cracked-bot -f

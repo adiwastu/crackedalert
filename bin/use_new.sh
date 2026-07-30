@@ -17,21 +17,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Production venv if it exists (deploy_v2.sh builds it), else the dev one.
-PYTHON="${CRACKED_PYTHON:-}"
-if [ -z "$PYTHON" ]; then
-    if [ -x /opt/crackedalert/venv/bin/python ]; then
-        PYTHON=/opt/crackedalert/venv/bin/python
-    else
-        PYTHON=/opt/crackedalert-dev/bin/python
-    fi
-fi
-
-if [ ! -x "$PYTHON" ]; then
-    echo "❌ python not found at $PYTHON"
-    echo "   set CRACKED_PYTHON=/path/to/venv/bin/python"
-    exit 1
-fi
+RUN_BOT="$(cd "$(dirname "$0")" && pwd)/run_bot.sh"
 
 echo "=> stopping bash stack..."
 systemctl stop cracked-listener.service cracked-checker.service 2>/dev/null
@@ -51,18 +37,32 @@ for svc in cracked-listener cracked-checker; do
     fi
 done
 
-echo "✅ old stack stopped. using $PYTHON"
+echo "✅ old stack stopped."
 echo
 
 if [ "${1:-}" = "--service" ]; then
+    if [ ! -x /usr/local/bin/crackedalert-run ]; then
+        echo "=> installing launcher + unit (first run)..."
+        install -m 755 "$RUN_BOT" /usr/local/bin/crackedalert-run
+        install -m 644 "$(dirname "$RUN_BOT")/../systemd/cracked-bot.service" \
+            /etc/systemd/system/
+        systemctl daemon-reload
+    fi
     systemctl start cracked-bot.service
-    sleep 1
-    systemctl is-active --quiet cracked-bot.service \
-        && echo "✅ cracked-bot: running (journalctl -u cracked-bot -f)" \
-        || { echo "❌ cracked-bot failed to start"; journalctl -u cracked-bot -n 20 --no-pager; exit 1; }
+    sleep 2
+    if systemctl is-active --quiet cracked-bot.service; then
+        echo "✅ cracked-bot: running in the background"
+        echo "   logs:  journalctl -u cracked-bot -f"
+        echo "   stop:  systemctl stop cracked-bot"
+    else
+        echo "❌ cracked-bot failed to start"
+        journalctl -u cracked-bot -n 30 --no-pager
+        exit 1
+    fi
     exit 0
 fi
 
 echo "starting bot in foreground -- Ctrl+C to stop"
+echo "(use --service to run it in the background instead)"
 echo "----------------------------------------------------------"
-exec "$PYTHON" -m crackedalert
+exec "$RUN_BOT"
