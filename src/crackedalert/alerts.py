@@ -10,7 +10,7 @@ import random
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable, List, Optional, Set
+from typing import Awaitable, Callable, List, Optional, Set, Tuple
 
 log = logging.getLogger("crackedalert.alerts")
 
@@ -167,3 +167,129 @@ class AlertEngine:
 def infer_direction(live_price: float, target: float) -> str:
     """Bash parity: live below target means we wait for an upward cross."""
     return CROSSING_UP if live_price < target else CROSSING_DOWN
+
+
+# ----------------------------------------------------------------------
+# candle-close alerts (separate store + engine)
+# ----------------------------------------------------------------------
+
+CANDLE_ABOVE = "ABOVE"
+CANDLE_BELOW = "BELOW"
+
+CANDLE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS candle_alerts (
+    id         TEXT PRIMARY KEY,
+    chat_id    INTEGER NOT NULL,
+    symbol     TEXT NOT NULL,
+    timeframe  TEXT NOT NULL,
+    target     REAL NOT NULL,
+    direction  TEXT NOT NULL,
+    message    TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_candle_alerts_key
+    ON candle_alerts(symbol, timeframe);
+"""
+
+
+@dataclass(frozen=True)
+class CandleAlert:
+    id: str
+    chat_id: int
+    symbol: str
+    timeframe: str
+    target: float
+    direction: str
+    message: str
+
+
+class CandleAlertStore:
+    def __init__(self, db_path: str):
+        self._db = sqlite3.connect(db_path)
+        self._db.executescript(CANDLE_SCHEMA)
+        self._db.commit()
+
+    def close(self) -> None:
+        self._db.close()
+
+    def _gen_id(self) -> str:
+        for _ in range(50):
+            candidate = "".join(random.choices(ID_ALPHABET, k=4))
+            row = self._db.execute(
+                "SELECT 1 FROM candle_alerts WHERE id = ?",
+                (candidate,)).fetchone()
+            if row is None:
+                return candidate
+        raise RuntimeError("could not generate a unique candle alert id")
+
+    def create(self, chat_id: int, symbol: str, timeframe: str,
+               target: float, direction: str, message: str) -> CandleAlert:
+        alert = CandleAlert(self._gen_id(), chat_id, symbol.upper(),
+                            timeframe.upper(), target, direction, message)
+        self._db.execute(
+            "INSERT INTO candle_alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (alert.id, alert.chat_id, alert.symbol, alert.timeframe,
+             alert.target, alert.direction, alert.message,
+             int(time.time())))
+        self._db.commit()
+        return alert
+
+    def for_chat(self, chat_id: int) -> List[CandleAlert]:
+        rows = self._db.execute(
+            "SELECT id, chat_id, symbol, timeframe, target, direction, "
+            "message FROM candle_alerts WHERE chat_id = ? ORDER BY created_at",
+            (chat_id,)).fetchall()
+        return [CandleAlert(*row) for row in rows]
+
+    def for_key(self, symbol: str, timeframe: str) -> List[CandleAlert]:
+        rows = self._db.execute(
+            "SELECT id, chat_id, symbol, timeframe, target, direction, "
+            "message FROM candle_alerts WHERE symbol = ? AND timeframe = ?",
+            (symbol.upper(), timeframe.upper())).fetchall()
+        return [CandleAlert(*row) for row in rows]
+
+    def active_keys(self) -> Set[Tuple[str, str]]:
+        rows = self._db.execute(
+            "SELECT DISTINCT symbol, timeframe FROM candle_alerts").fetchall()
+        return {(r[0], r[1]) for r in rows}
+
+    def cancel(self, alert_id: str, chat_id: int) -> bool:
+        cur = self._db.execute(
+            "DELETE FROM candle_alerts WHERE id = ? AND chat_id = ?",
+            (alert_id.upper(), chat_id))
+        self._db.commit()
+        return cur.rowcount > 0
+
+    def delete(self, alert_id: str) -> None:
+        self._db.execute(
+            "DELETE FROM candle_alerts WHERE id = ?", (alert_id,))
+        self._db.commit()
+
+
+class CandleAlertEngine:
+    """Consumes closed-bar events, fires crossed candle alerts, deletes them."""
+
+    def __init__(self, store: CandleAlertStore, notify: Notifier,
+                 format_fired: Formatter):
+        self._store = store
+        self._notify = notify
+        self._format = format_fired
+
+    async def on_closed_bar(self, symbol: str, timeframe: str,
+                            close: float, ts_minutes: int) -> None:
+        for alert in self._store.for_key(symbol, timeframe):
+            crossed = (
+                (alert.direction == CANDLE_ABOVE and close >= alert.target) or
+                (alert.direction == CANDLE_BELOW and close <= alert.target))
+            if not crossed:
+                continue
+            log.info("candle alert %s fired: %s %s closed %.5f vs %s",
+                     alert.id, alert.symbol, alert.timeframe, close,
+                     alert.target)
+            try:
+                await self._notify(alert.chat_id, self._format(alert))
+            except Exception:
+                log.exception("failed to notify chat %d for candle alert %s "
+                              "-- keeping alert", alert.chat_id, alert.id)
+                continue
+            self._store.delete(alert.id)

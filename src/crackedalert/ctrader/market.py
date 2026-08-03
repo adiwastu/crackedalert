@@ -127,6 +127,13 @@ class MarketData:
                 return name
         return None
 
+    def symbol_info(self, account_id: int, symbol_id: int) -> Optional[SymbolInfo]:
+        """Reverse lookup: symbolId -> full SymbolInfo, from the cache."""
+        for info in self._symbols.get(account_id, {}).values():
+            if info.symbol_id == symbol_id:
+                return info
+        return None
+
     # ------------------------------------------------------------------
     # subscriptions & quotes
     # ------------------------------------------------------------------

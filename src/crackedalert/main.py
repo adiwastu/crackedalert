@@ -14,11 +14,13 @@ from typing import Dict, Optional, Set, Tuple
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
-from .alerts import AlertEngine, AlertStore
+from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
+                     CandleAlertStore)
 from .bot import formatting as fmt
 from .bot.handlers import Handlers
 from .config import ConfigError, Settings, load_settings
 from .ctrader import client as ct
+from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
 from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService
@@ -112,6 +114,8 @@ async def _run_bot(settings: Settings) -> None:
     if imported:
         log.info("migrated %d alerts from the bash bot", imported)
 
+    candle_store = CandleAlertStore(settings.db_file)
+
     app = (Application.builder()
            .token(settings.telegram_bot_token).build())
 
@@ -134,6 +138,11 @@ async def _run_bot(settings: Settings) -> None:
                        feed_account.ctid_account_id, engine)
     markets[feed_account.environment].add_tick_listener(feed.on_tick)
 
+    candle_engine = CandleAlertEngine(candle_store, notify, fmt.candle_alert_fired)
+    candle_feed = CandleFeed(clients[feed_account.environment],
+                             markets[feed_account.environment],
+                             feed_account.ctid_account_id, candle_engine)
+
     def make_on_connected(env: str):
         async def on_connected() -> None:
             cli = clients[env]
@@ -149,6 +158,8 @@ async def _run_bot(settings: Settings) -> None:
             if env == feed_account.environment:
                 await feed.after_connect(settings.trade_symbol,
                                          store.active_symbols())
+                for sym, tf in candle_store.active_keys():
+                    candle_feed.add_symbol(sym, tf)
         return on_connected
 
     for env, cli in clients.items():
@@ -156,7 +167,8 @@ async def _run_bot(settings: Settings) -> None:
 
     trader = TradingService(clients, markets, settings)
     handlers = Handlers(settings, store, feed, settings.trade_symbol,
-                        trader=trader)
+                        trader=trader, candle_store=candle_store,
+                        candle_feed=candle_feed)
     handlers.register(app)
 
     async def on_token_failure(reason: str) -> None:
@@ -169,6 +181,7 @@ async def _run_bot(settings: Settings) -> None:
 
     for cli in clients.values():
         cli.start()
+    candle_feed.start()
 
     stop = asyncio.Event()
     try:
@@ -192,9 +205,11 @@ async def _run_bot(settings: Settings) -> None:
             await app.stop()
 
     refresh_task.cancel()
+    await candle_feed.stop()
     for cli in clients.values():
         await cli.stop()
     store.close()
+    candle_store.close()
     log.info("shut down cleanly")
 
 

@@ -17,6 +17,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .. import alerts as alerts_mod
 from ..config import Settings
+from ..ctrader import candles as candles_mod
 from ..ctrader.client import CTraderError
 from ..ctrader.trading import TradeRejected
 from . import formatting as fmt
@@ -137,19 +138,64 @@ def _is_number(token: str) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class CandleAlertArgs:
+    timeframe: str
+    target: float
+    direction: str     # ABOVE | BELOW
+    symbol: str
+    message: str
+
+
+def parse_cc_alert(text: str, default_symbol: str) -> CandleAlertArgs:
+    """/ccalert <tf> <price> <above|below> [symbol] [notes...]
+
+    Timeframe must be a known cTrader period. Direction is above|below.
+    The 4th token is a symbol only if it looks like one (ALL-CAPS or a
+    known symbol); otherwise it's folded into the notes.
+    """
+    tokens = text.split()[1:]
+    if len(tokens) < 3:
+        raise ParseError("usage")
+    timeframe = tokens[0].upper()
+    if timeframe not in candles_mod.TIMEFRAMES:
+        raise ParseError("timeframe")
+    try:
+        target = float(tokens[1])
+    except ValueError:
+        raise ParseError("usage")
+    direction = tokens[2].upper()
+    if direction not in (alerts_mod.CANDLE_ABOVE, alerts_mod.CANDLE_BELOW):
+        raise ParseError("direction")
+
+    rest = tokens[3:]
+    symbol = default_symbol
+    if rest and SYMBOL_RE.match(rest[0].upper()) and rest[0].isupper():
+        symbol = rest[0].upper()
+        rest = rest[1:]
+    message = " ".join(rest) if rest else "timeframe candle target reached."
+    return CandleAlertArgs(timeframe=timeframe, target=target,
+                           direction=direction, symbol=symbol,
+                           message=message)
+
+
 class Handlers:
     """Binds commands to services. Trading arrives with Phase 3; /m and /p
     reply with a migration notice until then."""
 
     def __init__(self, settings: Settings, store: alerts_mod.AlertStore,
-                 feed, trade_symbol: str, trader=None):
+                 feed, trade_symbol: str, trader=None,
+                 candle_store=None, candle_feed=None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
+        # candle_store: CandleAlertStore; candle_feed: CandleFeed
         self._settings = settings
         self._store = store
         self._feed = feed
         self._symbol = trade_symbol
         self._trader = trader
+        self._candle_store = candle_store
+        self._candle_feed = candle_feed
 
     def register(self, app: Application) -> None:
         app.add_handler(CommandHandler("alert", self.alert))
@@ -160,6 +206,11 @@ class Handlers:
         app.add_handler(CommandHandler("p", self.pending_order))
         app.add_handler(CommandHandler("orders", self.orders))
         app.add_handler(CommandHandler("positions", self.positions))
+        app.add_handler(CommandHandler("close_all", self.close_all))
+        app.add_handler(CommandHandler("be", self.breakeven))
+        app.add_handler(CommandHandler("ccalert", self.cc_alert))
+        app.add_handler(CommandHandler("cclist", self.cc_list))
+        app.add_handler(CommandHandler("cccancel", self.cc_cancel))
 
     def _allowed(self, update: Update) -> bool:
         chat = update.effective_chat
@@ -271,6 +322,111 @@ class Handlers:
                 account, "internal error"))
             return
         await self._reply(update, fmt.positions_list(rows, is_positions))
+
+    async def close_all(self, update: Update,
+                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return
+        tokens = update.effective_message.text.split()
+        if len(tokens) < 2:
+            await self._reply(update, fmt.close_all_usage())
+            return
+        account = tokens[1]
+        try:
+            results = await self._trader.close_all(account)
+        except TradeRejected as e:
+            await self._reply(update, str(e))
+            return
+        except CTraderError as e:
+            await self._reply(update, fmt.positions_error(
+                account, e.description))
+            return
+        except Exception:
+            log.exception("close_all failed")
+            await self._reply(update, fmt.positions_error(
+                account, "internal error"))
+            return
+        await self._reply(update, fmt.close_all_result(account, results))
+
+    async def breakeven(self, update: Update,
+                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return
+        tokens = update.effective_message.text.split()
+        if len(tokens) < 2:
+            await self._reply(update, fmt.breakeven_usage())
+            return
+        account = tokens[1]
+        try:
+            results = await self._trader.breakeven(account)
+        except TradeRejected as e:
+            await self._reply(update, str(e))
+            return
+        except CTraderError as e:
+            await self._reply(update, fmt.positions_error(
+                account, e.description))
+            return
+        except Exception:
+            log.exception("breakeven failed")
+            await self._reply(update, fmt.positions_error(
+                account, "internal error"))
+            return
+        await self._reply(update, fmt.breakeven_result(account, results))
+
+    async def cc_alert(self, update: Update,
+                       _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return
+        if self._candle_store is None or self._candle_feed is None:
+            await self._reply(update, "candle alerts are not wired up.")
+            return
+        try:
+            args = parse_cc_alert(update.effective_message.text, self._symbol)
+        except ParseError:
+            await self._reply(update, fmt.candle_alert_usage())
+            return
+
+        last_close = await self._candle_feed.last_close(
+            args.symbol, args.timeframe)
+        if last_close is None:
+            await self._reply(update, fmt.price_fetch_error(args.symbol))
+            return
+
+        alert = self._candle_store.create(
+            update.effective_chat.id, args.symbol, args.timeframe,
+            args.target, args.direction, args.message)
+        log.info("candle alert %s created: %s %s %s %s", alert.id,
+                 alert.symbol, alert.timeframe, alert.direction,
+                 alert.target)
+        await self._reply(update, fmt.candle_alert_set(alert, last_close))
+
+    async def cc_list(self, update: Update,
+                      _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return
+        if self._candle_store is None:
+            await self._reply(update, "candle alerts are not wired up.")
+            return
+        rows = self._candle_store.for_chat(update.effective_chat.id)
+        await self._reply(update, fmt.candle_alert_list(rows))
+
+    async def cc_cancel(self, update: Update,
+                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return
+        if self._candle_store is None:
+            await self._reply(update, "candle alerts are not wired up.")
+            return
+        tokens = update.effective_message.text.split()
+        if len(tokens) < 2:
+            await self._reply(update, fmt.candle_cancel_usage())
+            return
+        alert_id = tokens[1]
+        if self._candle_store.cancel(alert_id, update.effective_chat.id):
+            await self._reply(update, fmt.candle_cancelled(alert_id.upper()))
+        else:
+            await self._reply(
+                update, fmt.candle_cancel_not_found(alert_id.upper()))
 
     async def market_order(self, update: Update,
                            _ctx: ContextTypes.DEFAULT_TYPE) -> None:

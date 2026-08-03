@@ -37,16 +37,24 @@ class OrderResult:
 
 
 def lots_to_volume(lots: float, symbol: SymbolInfo) -> int:
-    """Convert decimal lots to protocol volume, snapped to broker limits."""
+    """Convert decimal lots to protocol volume, snapped to broker limits.
+
+    Rejects sub-minimum sizes instead of clamping up: a $10 risk calc that
+    floors to 0.003 lots must NOT silently become 0.01 lots (10x risk).
+    """
     if symbol.lot_size <= 0:
         raise TradeRejected("symbol lotSize unknown -- cannot size order")
     raw = lots * symbol.lot_size
+    # Reject below the broker minimum BEFORE step-flooring, so a tiny calc
+    # reports "below minimum" rather than a confusing "volume rounds to zero".
+    if symbol.min_volume > 0 and raw < symbol.min_volume:
+        min_lots = volume_to_lots(symbol.min_volume, symbol)
+        raise TradeRejected(
+            "error: calculated %.3f lots below the %.2f minimum -- "
+            "not placing the order." % (lots, min_lots))
     if symbol.step_volume > 0:
         raw = math.floor(raw / symbol.step_volume + 1e-9) * symbol.step_volume
     volume = int(round(raw))
-    if symbol.min_volume > 0 and volume < symbol.min_volume:
-        # bash parity: never trade below the minimum, clamp up
-        volume = symbol.min_volume
     if volume <= 0:
         raise TradeRejected("volume rounds to zero")
     return volume
@@ -250,6 +258,171 @@ class TradingService:
                     "extra": item.get("orderType"),
                 })
         return rows
+
+    # ------------------------------------------------------------------
+    # close all positions (ProtoOAClosePositionReq)
+    # ------------------------------------------------------------------
+    async def close_all(self, account_code: str) -> list:
+        """Close every open position on the account.
+
+        Returns a list of result dicts:
+          {id, symbol, side, volume, ok, message}
+        Raises TradeRejected for account/link errors.
+        """
+        account = self._settings.accounts.get(account_code)
+        if account is None:
+            raise TradeRejected(
+                "error: account '%s' not found." % account_code)
+
+        if account.environment != "demo" and not LIVE_TRADING_ENABLED:
+            raise TradeRejected(
+                "error: live trading is locked until the Phase 5 cutover. "
+                "use the demo account.")
+
+        cli = self._clients[account.environment]
+        market: MarketData = self._markets[account.environment]
+        if not cli.connected:
+            raise TradeRejected(
+                "error: cTrader %s link is down, try again shortly."
+                % account.environment)
+
+        _, payload = await cli.request(ct.PT_RECONCILE_REQ, {
+            "ctidTraderAccountId": account.ctid_account_id,
+        })
+        positions = payload.get("position", [])
+        results = []
+        for item in positions:
+            trade = item.get("tradeData", {}) or {}
+            position_id = item.get("positionId")
+            volume = int(trade.get("volume", 0))
+            symbol_id = int(trade.get("symbolId", 0))
+            symbol = market.symbol_name(account.ctid_account_id, symbol_id) \
+                or "#%d" % symbol_id
+            info = market.symbol_info(account.ctid_account_id, symbol_id)
+            try:
+                await cli.request(ct.PT_CLOSE_POSITION_REQ, {
+                    "ctidTraderAccountId": account.ctid_account_id,
+                    "positionId": position_id,
+                    "volume": volume,
+                })
+                results.append({
+                    "id": position_id, "symbol": symbol,
+                    "side": trade.get("tradeSide"),
+                    "volume": _volume_to_lots(volume, info),
+                    "ok": True, "message": "closed",
+                })
+            except ct.CTraderError as e:
+                results.append({
+                    "id": position_id, "symbol": symbol,
+                    "side": trade.get("tradeSide"),
+                    "volume": _volume_to_lots(volume, info),
+                    "ok": False, "message": e.description,
+                })
+        return results
+
+    # ------------------------------------------------------------------
+    # breakeven with spread buffer (ProtoOAAmendPositionSLTPReq)
+    # ------------------------------------------------------------------
+    async def breakeven(self, account_code: str) -> list:
+        """Move SL to breakeven + spread buffer on every open position.
+
+        BE_SL = entry + spread (BUY) / entry - spread (SELL). Only amended
+        when the market has actually moved past the BE level (BUY: bid >=
+        BE_SL; SELL: ask <= BE_SL). Existing TP is preserved.
+
+        Returns a list of result dicts:
+          {id, symbol, side, volume, ok, message, be_sl}
+        Raises TradeRejected for account/link errors.
+        """
+        account = self._settings.accounts.get(account_code)
+        if account is None:
+            raise TradeRejected(
+                "error: account '%s' not found." % account_code)
+
+        if account.environment != "demo" and not LIVE_TRADING_ENABLED:
+            raise TradeRejected(
+                "error: live trading is locked until the Phase 5 cutover. "
+                "use the demo account.")
+
+        cli = self._clients[account.environment]
+        market: MarketData = self._markets[account.environment]
+        if not cli.connected:
+            raise TradeRejected(
+                "error: cTrader %s link is down, try again shortly."
+                % account.environment)
+
+        _, payload = await cli.request(ct.PT_RECONCILE_REQ, {
+            "ctidTraderAccountId": account.ctid_account_id,
+        })
+        positions = payload.get("position", [])
+        results = []
+        for item in positions:
+            trade = item.get("tradeData", {}) or {}
+            position_id = item.get("positionId")
+            symbol_id = int(trade.get("symbolId", 0))
+            side = trade.get("tradeSide")
+            entry = item.get("price")
+            symbol = market.symbol_name(account.ctid_account_id, symbol_id) \
+                or "#%d" % symbol_id
+            info = market.symbol_info(account.ctid_account_id, symbol_id)
+
+            if entry is None or side not in (risk.BUY, risk.SELL):
+                results.append({
+                    "id": position_id, "symbol": symbol, "side": side,
+                    "volume": _volume_to_lots(trade.get("volume", 0), info),
+                    "ok": False, "message": "missing entry/side",
+                    "be_sl": None,
+                })
+                continue
+
+            quote = market.quote(account.ctid_account_id, symbol_id)
+            if quote is None:
+                results.append({
+                    "id": position_id, "symbol": symbol, "side": side,
+                    "volume": _volume_to_lots(trade.get("volume", 0), info),
+                    "ok": False, "message": "no fresh quote",
+                    "be_sl": None,
+                })
+                continue
+
+            spread = quote.ask - quote.bid
+            if side == risk.BUY:
+                be_sl = entry + spread
+                ready = quote.bid >= be_sl
+            else:
+                be_sl = entry - spread
+                ready = quote.ask <= be_sl
+
+            if not ready:
+                results.append({
+                    "id": position_id, "symbol": symbol, "side": side,
+                    "volume": _volume_to_lots(trade.get("volume", 0), info),
+                    "ok": False,
+                    "message": "not in profit by spread yet",
+                    "be_sl": be_sl,
+                })
+                continue
+
+            try:
+                await cli.request(ct.PT_AMEND_POSITION_SLTP_REQ, {
+                    "ctidTraderAccountId": account.ctid_account_id,
+                    "positionId": position_id,
+                    "stopLoss": be_sl,
+                })
+                results.append({
+                    "id": position_id, "symbol": symbol, "side": side,
+                    "volume": _volume_to_lots(trade.get("volume", 0), info),
+                    "ok": True, "message": "breakeven set",
+                    "be_sl": be_sl,
+                })
+            except ct.CTraderError as e:
+                results.append({
+                    "id": position_id, "symbol": symbol, "side": side,
+                    "volume": _volume_to_lots(trade.get("volume", 0), info),
+                    "ok": False, "message": e.description,
+                    "be_sl": be_sl,
+                })
+        return results
 
 
 def _volume_to_lots(volume, info) -> float:

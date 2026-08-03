@@ -36,11 +36,13 @@ class TradePlan:
 
 def _lots(risk_usd: float, dist: float, usd_per_point_per_lot: float,
           min_lots: float, lot_step: float) -> float:
+    """Return the raw floored lots. No min-lot clamp here: enforcing the
+    floor is the caller's job (trading.py rejects sub-minimum sizes)."""
     if dist <= 0:
         return 0.0
     raw = risk_usd / (dist * usd_per_point_per_lot)
     floored = math.floor(raw / lot_step + 1e-9) * lot_step
-    return max(round(floored, 8), min_lots)
+    return round(floored, 8)
 
 
 def _build(direction: str, order_kind: str, entry_ref: float,

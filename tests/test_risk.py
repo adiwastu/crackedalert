@@ -82,11 +82,13 @@ class PendingOrders(unittest.TestCase):
 
 
 class LotEdgeCases(unittest.TestCase):
-    def test_minimum_lot_clamp(self):
-        # 100 * 0.1% = 0.1 usd risk, dist 10 -> raw 0.0001 -> clamp 0.01
+    def test_minimum_lot_not_clamped(self):
+        # 100 * 0.1% = 0.1 usd risk, dist 10 -> raw 0.0001. Floored to the
+        # 0.01 step this becomes 0.0 (not clamped up to 0.01). trading.py
+        # rejects sub-minimum sizes instead of clamping.
         p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
                              rr=1, risk_pct=0.1, balance=100)
-        self.assertAlmostEqual(p.lots, 0.01)
+        self.assertEqual(p.lots, 0.0)
 
     def test_zero_distance_yields_zero_lots(self):
         # SL == entry ref -> dist 0 -> lots 0 (caller must reject)

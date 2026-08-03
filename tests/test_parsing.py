@@ -115,5 +115,44 @@ class TradeParsing(unittest.TestCase):
             handlers.parse_trade("/m 2440.00 y 2 $abc demo", is_market=True)
 
 
+class CandleAlertParsing(unittest.TestCase):
+    def test_full(self):
+        a = handlers.parse_cc_alert(
+            "/ccalert M15 2450 above XAUUSD breakout", "XAUUSD")
+        self.assertEqual(a.timeframe, "M15")
+        self.assertEqual(a.target, 2450.0)
+        self.assertEqual(a.direction, "ABOVE")
+        self.assertEqual(a.symbol, "XAUUSD")
+        self.assertEqual(a.message, "breakout")
+
+    def test_default_symbol_and_message(self):
+        a = handlers.parse_cc_alert("/ccalert H1 2400 below", "XAUUSD")
+        self.assertEqual(a.symbol, "XAUUSD")
+        self.assertEqual(a.direction, "BELOW")
+        self.assertIn("target", a.message)
+
+    def test_lowercase_direction(self):
+        a = handlers.parse_cc_alert("/ccalert M5 1.10 above", "EURUSD")
+        self.assertEqual(a.direction, "ABOVE")
+
+    def test_bad_timeframe(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_cc_alert("/ccalert X99 2450 above", "XAUUSD")
+
+    def test_bad_direction(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_cc_alert("/ccalert M15 2450 sideways", "XAUUSD")
+
+    def test_missing_args(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_cc_alert("/ccalert M15 2450", "XAUUSD")
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_cc_alert("/ccalert", "XAUUSD")
+
+    def test_bad_price(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_cc_alert("/ccalert M15 abc above", "XAUUSD")
+
+
 if __name__ == "__main__":
     unittest.main()

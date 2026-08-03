@@ -8,7 +8,9 @@ message silently never arrived). We say [ID] instead.
 
 from typing import Iterable, List, Optional
 
-from ..alerts import CROSSING_UP, Alert
+from ..alerts import (CANDLE_ABOVE, CANDLE_BELOW, CROSSING_UP, Alert,
+                      CandleAlert)
+from .. import version as bot_version
 
 
 def alert_set(alert: Alert, live_price: float) -> str:
@@ -77,9 +79,19 @@ def help_text(account_codes: Iterable[str],
         "/p [entry] [sl] [widen:y/n] [rr] [risk%] [account]",
         "example: /p 2450.00 2455.00 n 3 1 5k",
         "",
+        "position management:",
+        "/close_all [account] — closes all positions",
+        "/be [account] — move SL to breakeven + spread",
+        "",
         "set alert:",
         "/alert [target] [notes]",
         "example: /alert 2450.00 approaching demand",
+        "",
+        "candle close alerts:",
+        "/ccalert [tf] [price] [above|below] [symbol] [notes]",
+        "example: /ccalert M15 2450 above XAUUSD breakout",
+        "/cclist — shows active candle alerts",
+        "/cccancel [id] — deletes a candle alert",
         "",
         "utilities:",
         "/list — shows active alerts",
@@ -97,6 +109,7 @@ def help_text(account_codes: Iterable[str],
             parts.append("%s: %s" % (code, "?" if bal is None
                                      else _trim(bal)))
         lines.append("balances: %s" % " | ".join(parts))
+    lines.append("cracked alert %s" % bot_version())
     return "\n".join(lines)
 
 
@@ -178,6 +191,110 @@ def positions_list(rows: List[dict], is_positions: bool) -> str:
                      % (r.get("id"), side, r.get("symbol"), vol_text,
                         price_text, sl_text, tp_text, extra_text))
     return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------
+# close_all / breakeven
+# ----------------------------------------------------------------------
+def close_all_usage() -> str:
+    return "⚠️ Usage: /close_all [account]"
+
+
+def close_all_result(account: str, results: List[dict]) -> str:
+    if not results:
+        return "no open positions."
+    ok = sum(1 for r in results if r.get("ok"))
+    lines = ["closed %d/%d positions (%s):"
+             % (ok, len(results), account)]
+    for r in results:
+        vol = r.get("volume")
+        vol_text = "%.2f" % vol if vol is not None else "?"
+        status = "closed" if r.get("ok") else "failed: %s" % r.get("message")
+        lines.append("(%s)  %s %s %s → %s"
+                     % (r.get("id"), r.get("side"), r.get("symbol"),
+                        vol_text, status))
+    return "\n".join(lines)
+
+
+def breakeven_usage() -> str:
+    return "⚠️ Usage: /be [account]"
+
+
+def breakeven_result(account: str, results: List[dict]) -> str:
+    if not results:
+        return "no open positions."
+    ok = sum(1 for r in results if r.get("ok"))
+    lines = ["breakeven set on %d/%d positions (%s):"
+             % (ok, len(results), account)]
+    for r in results:
+        vol = r.get("volume")
+        vol_text = "%.2f" % vol if vol is not None else "?"
+        be = r.get("be_sl")
+        if r.get("ok"):
+            detail = "BE at %s" % _trim(be) if be is not None else "BE set"
+        else:
+            detail = "skipped — %s" % r.get("message")
+            if be is not None:
+                detail += " (needs %s)" % _trim(be)
+        lines.append("(%s)  %s %s %s → %s"
+                     % (r.get("id"), r.get("side"), r.get("symbol"),
+                        vol_text, detail))
+    return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------
+# candle close alerts
+# ----------------------------------------------------------------------
+def candle_alert_usage() -> str:
+    return ("⚠️ <b>Usage:</b> /ccalert [tf] [price] [above|below] "
+            "[symbol] [notes]\n"
+            "timeframes: M1 M5 M15 M30 H1 H4 D1 W1 MN1")
+
+
+def candle_alert_set(alert: CandleAlert, last_close: Optional[float]) -> str:
+    direction = "above" if alert.direction == CANDLE_ABOVE else "below"
+    line = ("cracked candle alert set (id: %s).\n"
+            "%s %s\n"
+            "close %s %s\n\n"
+            "Notes: %s"
+            % (alert.id, alert.symbol, alert.timeframe, direction,
+               _trim(alert.target), alert.message))
+    if last_close is not None:
+        line += "\nlast closed close: %s" % _trim(last_close)
+    return line
+
+
+def candle_alert_fired(alert: CandleAlert) -> str:
+    direction = "above" if alert.direction == CANDLE_ABOVE else "below"
+    return ("cracked candle alert hit! (id:%s)\n"
+            "%s %s closed %s %s.\n"
+            "notes: %s"
+            % (alert.id, alert.symbol, alert.timeframe, direction,
+               _trim(alert.target), alert.message))
+
+
+def candle_alert_list(alerts: List[CandleAlert]) -> str:
+    if not alerts:
+        return "no active candle alerts."
+    lines = ["active candle alerts:"]
+    for a in alerts:
+        direction = "above" if a.direction == CANDLE_ABOVE else "below"
+        lines.append("(%s)  %s %s close %s %s - %s"
+                     % (a.id, a.symbol, a.timeframe, direction,
+                        _trim(a.target), a.message))
+    return "\n".join(lines)
+
+
+def candle_cancel_usage() -> str:
+    return "⚠️ Usage: /cccancel [ID]"
+
+
+def candle_cancelled(alert_id: str) -> str:
+    return "candle alert %s cancelled." % alert_id
+
+
+def candle_cancel_not_found(alert_id: str) -> str:
+    return "id %s not found or doesn't belong to you." % alert_id
 
 
 def _trim(value: float) -> str:

@@ -9,7 +9,8 @@ a reintroduced unescaped '%' fails a test instead of a live /help call.
 
 import unittest
 
-from crackedalert.alerts import CROSSING_DOWN, CROSSING_UP, Alert
+from crackedalert.alerts import (CANDLE_ABOVE, CANDLE_BELOW, CROSSING_DOWN,
+                                 CROSSING_UP, Alert, CandleAlert)
 from crackedalert.bot import formatting as fmt
 
 
@@ -111,6 +112,79 @@ class AllFormattersRunWithoutRaising(unittest.TestCase):
     def test_positions_error(self):
         self.assertIn("demo", fmt.positions_error("demo", "boom"))
         self.assertIn("boom", fmt.positions_error("demo", "boom"))
+
+    def test_close_all_result(self):
+        results = [
+            {"id": 1, "side": "BUY", "symbol": "XAUUSD", "volume": 0.04,
+             "ok": True, "message": "closed"},
+            {"id": 2, "side": "SELL", "symbol": "XAUUSD", "volume": 0.1,
+             "ok": False, "message": "no money"},
+        ]
+        text = fmt.close_all_result("demo", results)
+        self.assertIn("closed 1/2 positions (demo):", text)
+        self.assertIn("(1)  BUY XAUUSD 0.04 → closed", text)
+        self.assertIn("(2)  SELL XAUUSD 0.10 → failed: no money", text)
+
+    def test_close_all_empty(self):
+        self.assertEqual(fmt.close_all_result("demo", []), "no open positions.")
+
+    def test_breakeven_result(self):
+        results = [
+            {"id": 1, "side": "BUY", "symbol": "XAUUSD", "volume": 0.04,
+             "ok": True, "message": "breakeven set", "be_sl": 2450.2},
+            {"id": 2, "side": "SELL", "symbol": "XAUUSD", "volume": 0.1,
+             "ok": False, "message": "not in profit by spread yet",
+             "be_sl": 2399.8},
+        ]
+        text = fmt.breakeven_result("demo", results)
+        self.assertIn("breakeven set on 1/2 positions (demo):", text)
+        self.assertIn("(1)  BUY XAUUSD 0.04 → BE at 2450.2", text)
+        self.assertIn("(2)  SELL XAUUSD 0.10 → skipped — not in profit",
+                      text)
+
+    def test_breakeven_empty(self):
+        self.assertEqual(fmt.breakeven_result("demo", []), "no open positions.")
+
+    def test_candle_alert_set(self):
+        a = CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
+                        CANDLE_ABOVE, "breakout")
+        text = fmt.candle_alert_set(a, 2449.5)
+        self.assertIn("AB12", text)
+        self.assertIn("XAUUSD M15", text)
+        self.assertIn("close above 2450", text)
+        self.assertIn("last closed close: 2449.5", text)
+
+    def test_candle_alert_fired(self):
+        a = CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
+                        CANDLE_BELOW, "note")
+        text = fmt.candle_alert_fired(a)
+        self.assertIn("AB12", text)
+        self.assertIn("XAUUSD M15 closed below 2450", text)
+
+    def test_candle_alert_list(self):
+        alerts = [CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
+                              CANDLE_ABOVE, "n1"),
+                  CandleAlert("CD34", 111, "EURUSD", "H1", 1.1,
+                              CANDLE_BELOW, "n2")]
+        text = fmt.candle_alert_list(alerts)
+        self.assertIn("active candle alerts:", text)
+        self.assertIn("AB12", text)
+        self.assertIn("CD34", text)
+
+    def test_candle_alert_list_empty(self):
+        self.assertEqual(fmt.candle_alert_list([]),
+                         "no active candle alerts.")
+
+    def test_candle_cancel(self):
+        self.assertIn("AB12", fmt.candle_cancelled("AB12"))
+        self.assertIn("AB12", fmt.candle_cancel_not_found("AB12"))
+        self.assertIn("/cccancel", fmt.candle_cancel_usage())
+        self.assertIn("/ccalert", fmt.candle_alert_usage())
+        self.assertIn("M15", fmt.candle_alert_usage())
+
+    def test_help_text_has_version(self):
+        text = fmt.help_text(["demo"])
+        self.assertIn("cracked alert v2.", text)
 
     def test_order_failed(self):
         text = fmt.order_failed("XAUUSD", "BUY", "MARKET", "demo",

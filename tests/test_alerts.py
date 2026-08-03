@@ -118,5 +118,100 @@ class DirectionInference(unittest.TestCase):
                          alerts.CROSSING_DOWN)    # tie: bash "else" branch
 
 
+class CandleStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.CandleAlertStore(":memory:")
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_create_and_list(self):
+        a = self.store.create(111, "xauusd", "M15", 2450.0,
+                              alerts.CANDLE_ABOVE, "breakout")
+        self.assertEqual(len(a.id), 4)
+        self.assertEqual(a.symbol, "XAUUSD")
+        self.assertEqual(a.timeframe, "M15")
+        rows = self.store.for_chat(111)
+        self.assertEqual([r.id for r in rows], [a.id])
+        self.assertEqual(self.store.for_chat(222), [])
+
+    def test_for_key(self):
+        self.store.create(1, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "a")
+        self.store.create(1, "XAUUSD", "H1", 2400.0,
+                          alerts.CANDLE_BELOW, "b")
+        self.store.create(1, "EURUSD", "M15", 1.1,
+                          alerts.CANDLE_ABOVE, "c")
+        self.assertEqual(len(self.store.for_key("XAUUSD", "M15")), 1)
+        self.assertEqual(len(self.store.for_key("XAUUSD", "H1")), 1)
+        self.assertEqual(len(self.store.for_key("EURUSD", "M15")), 1)
+
+    def test_active_keys(self):
+        self.store.create(1, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "a")
+        self.store.create(1, "EURUSD", "H1", 1.1,
+                          alerts.CANDLE_BELOW, "b")
+        self.assertEqual(self.store.active_keys(),
+                         {("XAUUSD", "M15"), ("EURUSD", "H1")})
+
+    def test_cancel_ownership(self):
+        a = self.store.create(111, "XAUUSD", "M15", 2450.0,
+                              alerts.CANDLE_ABOVE, "x")
+        self.assertFalse(self.store.cancel(a.id, 999))
+        self.assertTrue(self.store.cancel(a.id.lower(), 111))
+        self.assertFalse(self.store.cancel(a.id, 111))
+
+
+class CandleEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.CandleAlertStore(":memory:")
+        self.sent = []
+
+        async def notify(chat_id, text):
+            self.sent.append((chat_id, text))
+
+        self.engine = alerts.CandleAlertEngine(
+            self.store, notify, fmt.candle_alert_fired)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_above_fires_when_close_above_target(self):
+        a = self.store.create(111, "XAUUSD", "M15", 2450.0,
+                              alerts.CANDLE_ABOVE, "note")
+        run(self.engine.on_closed_bar("XAUUSD", "M15", 2449.0, 100))
+        self.assertEqual(self.sent, [])
+        run(self.engine.on_closed_bar("XAUUSD", "M15", 2450.5, 101))
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn(a.id, self.sent[0][1])
+        self.assertEqual(self.store.for_chat(111), [])   # deleted
+
+    def test_below_fires_when_close_below_target(self):
+        self.store.create(111, "XAUUSD", "H1", 2400.0,
+                          alerts.CANDLE_BELOW, "note")
+        run(self.engine.on_closed_bar("XAUUSD", "H1", 2400.5, 100))
+        self.assertEqual(self.sent, [])
+        run(self.engine.on_closed_bar("XAUUSD", "H1", 2399.5, 101))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_other_key_untouched(self):
+        self.store.create(111, "EURUSD", "M15", 1.1,
+                          alerts.CANDLE_ABOVE, "x")
+        run(self.engine.on_closed_bar("XAUUSD", "M15", 2000.0, 100))
+        self.assertEqual(self.sent, [])
+
+    def test_failed_notify_keeps_alert(self):
+        self.store.create(111, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "note")
+
+        async def broken_notify(chat_id, text):
+            raise RuntimeError("telegram down")
+
+        engine = alerts.CandleAlertEngine(self.store, broken_notify,
+                                          fmt.candle_alert_fired)
+        run(engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
+
+
 if __name__ == "__main__":
     unittest.main()

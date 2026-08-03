@@ -30,9 +30,11 @@ class VolumeConversion(unittest.TestCase):
         # 0.045 lots -> 450 raw -> floored to step 100 -> 400
         self.assertEqual(trading.lots_to_volume(0.045, XAU), 400)
 
-    def test_clamps_up_to_min(self):
-        # 0.001 lots -> 10 raw -> below min 100 -> clamped to 100
-        self.assertEqual(trading.lots_to_volume(0.001, XAU), 100)
+    def test_sub_minimum_rejected(self):
+        # 0.001 lots -> 10 raw -> below min 100 -> rejected, not clamped
+        with self.assertRaises(trading.TradeRejected) as cm:
+            trading.lots_to_volume(0.001, XAU)
+        self.assertIn("minimum", str(cm.exception))
 
     def test_unknown_lot_size_rejected(self):
         broken = SymbolInfo(1, "X", 2, 0, 0, 0, 1)
@@ -82,6 +84,8 @@ class FakeClient:
     def __init__(self):
         self.connected = True
         self.orders = []
+        self.closes = []
+        self.amends = []
         self.reconcile_payload = {
             "position": [
                 {"positionId": 1,
@@ -113,6 +117,16 @@ class FakeClient:
                 "order": {"orderId": 555}}
         if payload_type == ct.PT_RECONCILE_REQ:
             return ct.PT_RECONCILE_RES, self.reconcile_payload
+        if payload_type == ct.PT_CLOSE_POSITION_REQ:
+            self.closes.append(payload)
+            return ct.PT_EXECUTION_EVENT, {
+                "executionType": "ORDER_FILLED",
+                "order": {"orderId": 999}}
+        if payload_type == ct.PT_AMEND_POSITION_SLTP_REQ:
+            self.amends.append(payload)
+            return ct.PT_EXECUTION_EVENT, {
+                "executionType": "ORDER_ACCEPTED",
+                "order": {"orderId": 888}}
         raise AssertionError("unexpected request %s" % payload_type)
 
 
@@ -129,6 +143,15 @@ class FakeMarket:
             if info.symbol_id == symbol_id:
                 return name
         return None
+
+    def symbol_info(self, account_id, symbol_id):
+        for info in self._symbols.get(account_id, {}).values():
+            if info.symbol_id == symbol_id:
+                return info
+        return None
+
+    def quote(self, account_id, symbol_id):
+        return self._quote
 
 
 def make_settings():
@@ -242,6 +265,46 @@ class TradingServiceTests(unittest.TestCase):
     def test_positions_unknown_account(self):
         with self.assertRaises(trading.TradeRejected):
             run(self.service.positions_or_orders("nope", True))
+
+    def test_close_all(self):
+        results = run(self.service.close_all("demo"))
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["ok"])
+        self.assertEqual(results[0]["message"], "closed")
+        sent = self.cli.closes[0]
+        self.assertEqual(sent["positionId"], 1)
+        self.assertEqual(sent["volume"], 400)   # full volume
+
+    def test_close_all_live_locked(self):
+        with self.assertRaises(trading.TradeRejected) as cm:
+            run(self.service.close_all("5k"))
+        self.assertIn("locked", str(cm.exception))
+
+    def test_breakeven_buy_ready(self):
+        # BUY entry 2450, spread 0.2 -> BE at 2450.2; bid 2449.8 < 2450.2
+        # so NOT ready yet -> skipped
+        results = run(self.service.breakeven("demo"))
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0]["ok"])
+        self.assertIn("not in profit", results[0]["message"])
+        self.assertAlmostEqual(results[0]["be_sl"], 2450.2)
+        self.assertEqual(self.cli.amends, [])   # nothing sent
+
+    def test_breakeven_buy_ready_when_price_moved(self):
+        # Move bid above BE: bid 2450.5, ask 2450.7 -> spread 0.2
+        quote = Quote(bid=2450.5, ask=2450.7, updated_at=time.monotonic())
+        service = trading.TradingService(
+            clients={"demo": self.cli},
+            markets={"demo": FakeMarket(quote)},
+            settings=make_settings())
+        results = run(service.breakeven("demo"))
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["ok"])
+        self.assertAlmostEqual(results[0]["be_sl"], 2450.2)
+        sent = self.cli.amends[0]
+        self.assertEqual(sent["positionId"], 1)
+        self.assertAlmostEqual(sent["stopLoss"], 2450.2)
+        self.assertNotIn("takeProfit", sent)   # TP preserved (not sent)
 
 
 class SuccessMessageFormat(unittest.TestCase):
