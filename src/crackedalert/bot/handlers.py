@@ -207,6 +207,8 @@ class Handlers:
         app.add_handler(CommandHandler("orders", self.orders))
         app.add_handler(CommandHandler("positions", self.positions))
         app.add_handler(CommandHandler("close_all", self.close_all))
+        app.add_handler(CommandHandler("close", self.close_position))
+        app.add_handler(CommandHandler("cancel_order", self.cancel_order))
         app.add_handler(CommandHandler("be", self.breakeven))
         app.add_handler(CommandHandler("ccalert", self.cc_alert))
         app.add_handler(CommandHandler("cclist", self.cc_list))
@@ -347,6 +349,66 @@ class Handlers:
                 account, "internal error"))
             return
         await self._reply(update, fmt.close_all_result(account, results))
+
+    async def close_position(self, update: Update,
+                             _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return
+        tokens = update.effective_message.text.split()
+        if len(tokens) < 3:
+            await self._reply(update, fmt.close_usage())
+            return
+        try:
+            position_id = int(tokens[1])
+        except ValueError:
+            await self._reply(update, fmt.close_usage())
+            return
+        account = tokens[2]
+        try:
+            await self._trader.close_position(account, position_id)
+        except TradeRejected as e:
+            await self._reply(update, str(e))
+            return
+        except CTraderError as e:
+            await self._reply(update, fmt.close_error(
+                account, position_id, e.description))
+            return
+        except Exception:
+            log.exception("close position failed")
+            await self._reply(update, fmt.close_error(
+                account, position_id, "internal error"))
+            return
+        await self._reply(update, fmt.close_success(account, position_id))
+
+    async def cancel_order(self, update: Update,
+                           _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return
+        tokens = update.effective_message.text.split()
+        if len(tokens) < 3:
+            await self._reply(update, fmt.cancel_order_usage())
+            return
+        try:
+            order_id = int(tokens[1])
+        except ValueError:
+            await self._reply(update, fmt.cancel_order_usage())
+            return
+        account = tokens[2]
+        try:
+            await self._trader.cancel_order(account, order_id)
+        except TradeRejected as e:
+            await self._reply(update, str(e))
+            return
+        except CTraderError as e:
+            await self._reply(update, fmt.cancel_order_error(
+                account, order_id, e.description))
+            return
+        except Exception:
+            log.exception("cancel order failed")
+            await self._reply(update, fmt.cancel_order_error(
+                account, order_id, "internal error"))
+            return
+        await self._reply(update, fmt.cancel_order_success(account, order_id))
 
     async def breakeven(self, update: Update,
                         _ctx: ContextTypes.DEFAULT_TYPE) -> None:

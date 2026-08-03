@@ -86,6 +86,7 @@ class FakeClient:
         self.orders = []
         self.closes = []
         self.amends = []
+        self.cancels = []
         self.reconcile_payload = {
             "position": [
                 {"positionId": 1,
@@ -127,6 +128,11 @@ class FakeClient:
             return ct.PT_EXECUTION_EVENT, {
                 "executionType": "ORDER_ACCEPTED",
                 "order": {"orderId": 888}}
+        if payload_type == ct.PT_CANCEL_ORDER_REQ:
+            self.cancels.append(payload)
+            return ct.PT_EXECUTION_EVENT, {
+                "executionType": "ORDER_CANCELLED",
+                "order": {"orderId": payload["orderId"]}}
         raise AssertionError("unexpected request %s" % payload_type)
 
 
@@ -188,12 +194,13 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["stopLoss"], 2439.0)
         self.assertEqual(sent["takeProfit"], 2472.0)
 
-    def test_live_account_is_locked(self):
+    def test_live_account_works(self):
+        # LIVE_TRADING_ENABLED is True after the Phase 5 cutover.
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
                          risk_pct=0.5, account="5k")
-        with self.assertRaises(trading.TradeRejected) as cm:
-            run(self.service.execute(args, True))
-        self.assertIn("locked", str(cm.exception))
+        plan, symbol, result, lots = run(self.service.execute(args, True))
+        self.assertEqual(result.order_id, 555)
+        self.assertEqual(plan.direction, risk.BUY)
 
     def test_unknown_account(self):
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
@@ -275,10 +282,28 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["positionId"], 1)
         self.assertEqual(sent["volume"], 400)   # full volume
 
-    def test_close_all_live_locked(self):
+    def test_close_all_live_works(self):
+        # LIVE_TRADING_ENABLED is True after the cutover.
+        results = run(self.service.close_all("5k"))
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["ok"])
+
+    def test_close_position(self):
+        run(self.service.close_position("demo", 1))
+        sent = self.cli.closes[0]
+        self.assertEqual(sent["positionId"], 1)
+        self.assertEqual(sent["volume"], 400)   # full volume
+
+    def test_close_position_not_found(self):
         with self.assertRaises(trading.TradeRejected) as cm:
-            run(self.service.close_all("5k"))
-        self.assertIn("locked", str(cm.exception))
+            run(self.service.close_position("demo", 999))
+        self.assertIn("not found", str(cm.exception))
+
+    def test_cancel_order(self):
+        run(self.service.cancel_order("demo", 7))
+        sent = self.cli.cancels[0]
+        self.assertEqual(sent["orderId"], 7)
+        self.assertEqual(sent["ctidTraderAccountId"], 111)
 
     def test_breakeven_buy_ready(self):
         # BUY entry 2450, spread 0.2 -> BE at 2450.2; bid 2449.8 < 2450.2

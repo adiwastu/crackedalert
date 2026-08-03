@@ -64,8 +64,7 @@ else
 fi
 
 # ==========================================
-# CUTOVER (Phase 5): uncomment to retire the bash stack.
-# Only after the new bot verifiably works with the real token.
+# CUTOVER (Phase 5): retire the bash stack.
 # ==========================================
-# systemctl disable --now cracked-listener.service cracked-checker.service
-# echo "🪦 bash stack retired."
+systemctl disable --now cracked-listener.service cracked-checker.service
+echo "🪦 bash stack retired."

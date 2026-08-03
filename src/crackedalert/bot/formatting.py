@@ -81,6 +81,8 @@ def help_text(account_codes: Iterable[str],
         "",
         "position management:",
         "/close_all [account] — closes all positions",
+        "/close [id] [account] — closes one position",
+        "/cancel_order [id] [account] — cancels one pending order",
         "/be [account] — move SL to breakeven + spread",
         "",
         "set alert:",
@@ -218,6 +220,30 @@ def close_all_result(account: str, results: List[dict]) -> str:
 
 def breakeven_usage() -> str:
     return "⚠️ Usage: /be [account]"
+
+
+def close_usage() -> str:
+    return "⚠️ Usage: /close [id] [account]"
+
+
+def close_success(account: str, position_id: int) -> str:
+    return "position %s closed (%s)." % (position_id, account)
+
+
+def close_error(account: str, position_id: int, reason: str) -> str:
+    return "close failed (%s): %s" % (account, reason)
+
+
+def cancel_order_usage() -> str:
+    return "⚠️ Usage: /cancel_order [id] [account]"
+
+
+def cancel_order_success(account: str, order_id: int) -> str:
+    return "order %s cancelled (%s)." % (order_id, account)
+
+
+def cancel_order_error(account: str, order_id: int, reason: str) -> str:
+    return "cancel failed (%s): %s" % (account, reason)
 
 
 def breakeven_result(account: str, results: List[dict]) -> str:

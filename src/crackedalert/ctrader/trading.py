@@ -21,7 +21,7 @@ from .market import MarketData, SymbolInfo
 
 log = logging.getLogger("crackedalert.trading")
 
-LIVE_TRADING_ENABLED = False          # flipped at Phase 5 cutover
+LIVE_TRADING_ENABLED = True           # Phase 5 cutover: live trading is on
 ORDER_TIMEOUT_SECONDS = 10.0
 MAGIC_LABEL = "crackedalert"          # cTrader has no magic numbers; label instead
 
@@ -423,6 +423,75 @@ class TradingService:
                     "be_sl": be_sl,
                 })
         return results
+
+    # ------------------------------------------------------------------
+    # cancel a single pending order (ProtoOACancelOrderReq)
+    # ------------------------------------------------------------------
+    async def cancel_order(self, account_code: str, order_id: int) -> None:
+        """Cancel one working order. Raises TradeRejected for account/link
+        errors, CTraderError from the wire."""
+        account = self._settings.accounts.get(account_code)
+        if account is None:
+            raise TradeRejected(
+                "error: account '%s' not found." % account_code)
+
+        if account.environment != "demo" and not LIVE_TRADING_ENABLED:
+            raise TradeRejected(
+                "error: live trading is locked until the Phase 5 cutover. "
+                "use the demo account.")
+
+        cli = self._clients[account.environment]
+        if not cli.connected:
+            raise TradeRejected(
+                "error: cTrader %s link is down, try again shortly."
+                % account.environment)
+
+        await cli.request(ct.PT_CANCEL_ORDER_REQ, {
+            "ctidTraderAccountId": account.ctid_account_id,
+            "orderId": order_id,
+        })
+
+    # ------------------------------------------------------------------
+    # close a single position (ProtoOAClosePositionReq)
+    # ------------------------------------------------------------------
+    async def close_position(self, account_code: str, position_id: int) -> None:
+        """Close one open position at its full volume. Raises TradeRejected
+        for account/link/not-found errors, CTraderError from the wire."""
+        account = self._settings.accounts.get(account_code)
+        if account is None:
+            raise TradeRejected(
+                "error: account '%s' not found." % account_code)
+
+        if account.environment != "demo" and not LIVE_TRADING_ENABLED:
+            raise TradeRejected(
+                "error: live trading is locked until the Phase 5 cutover. "
+                "use the demo account.")
+
+        cli = self._clients[account.environment]
+        if not cli.connected:
+            raise TradeRejected(
+                "error: cTrader %s link is down, try again shortly."
+                % account.environment)
+
+        _, payload = await cli.request(ct.PT_RECONCILE_REQ, {
+            "ctidTraderAccountId": account.ctid_account_id,
+        })
+        for item in payload.get("position", []):
+            if int(item.get("positionId", 0)) == position_id:
+                volume = int((item.get("tradeData", {}) or {}).get(
+                    "volume", 0))
+                if volume <= 0:
+                    raise TradeRejected(
+                        "error: position %d has no volume to close."
+                        % position_id)
+                await cli.request(ct.PT_CLOSE_POSITION_REQ, {
+                    "ctidTraderAccountId": account.ctid_account_id,
+                    "positionId": position_id,
+                    "volume": volume,
+                })
+                return
+        raise TradeRejected(
+            "error: position %d not found on %s." % (position_id, account_code))
 
 
 def _volume_to_lots(volume, info) -> float:

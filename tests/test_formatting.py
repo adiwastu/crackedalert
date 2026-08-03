@@ -145,6 +145,18 @@ class AllFormattersRunWithoutRaising(unittest.TestCase):
     def test_breakeven_empty(self):
         self.assertEqual(fmt.breakeven_result("demo", []), "no open positions.")
 
+    def test_close_single(self):
+        self.assertEqual(fmt.close_success("demo", 1),
+                         "position 1 closed (demo).")
+        self.assertIn("boom", fmt.close_error("demo", 1, "boom"))
+        self.assertIn("/close", fmt.close_usage())
+
+    def test_cancel_order(self):
+        self.assertEqual(fmt.cancel_order_success("demo", 7),
+                         "order 7 cancelled (demo).")
+        self.assertIn("boom", fmt.cancel_order_error("demo", 7, "boom"))
+        self.assertIn("/cancel_order", fmt.cancel_order_usage())
+
     def test_candle_alert_set(self):
         a = CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
                         CANDLE_ABOVE, "breakout")
