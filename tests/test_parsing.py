@@ -87,6 +87,33 @@ class TradeParsing(unittest.TestCase):
         with self.assertRaises(handlers.ParseError):
             handlers.parse_trade("/m 2440.00 y 2 -1 10k", is_market=True)
 
+    def test_dollar_risk_prefix(self):
+        t = handlers.parse_trade("/m 2440.00 y 2 $50 demo", is_market=True)
+        self.assertEqual(t.risk_usd, 50.0)
+        self.assertEqual(t.risk_pct, 0.0)
+        self.assertIsNone(t.entry)
+
+    def test_dollar_risk_pending(self):
+        t = handlers.parse_trade("/p 2400.00 2395.00 n 3 $100 demo",
+                                 is_market=False)
+        self.assertEqual(t.risk_usd, 100.0)
+        self.assertEqual(t.entry, 2400.0)
+
+    def test_dollar_risk_decimal(self):
+        t = handlers.parse_trade("/m 2440.00 n 2 $12.50 demo",
+                                 is_market=True)
+        self.assertAlmostEqual(t.risk_usd, 12.5)
+
+    def test_dollar_risk_nonpositive_rejected(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440.00 y 2 $0 demo", is_market=True)
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440.00 y 2 $-5 demo", is_market=True)
+
+    def test_dollar_risk_bad_number(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440.00 y 2 $abc demo", is_market=True)
+
 
 if __name__ == "__main__":
     unittest.main()

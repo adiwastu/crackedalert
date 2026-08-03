@@ -47,7 +47,8 @@ def _build(direction: str, order_kind: str, entry_ref: float,
            placement_price: Optional[float], sl: float, widen: bool,
            rr: float, risk_pct: float, balance: float, spread: float,
            usd_per_point_per_lot: float, min_lots: float,
-           lot_step: float) -> TradePlan:
+           lot_step: float, risk_usd_override: Optional[float] = None
+           ) -> TradePlan:
     widen_label = ""
     if widen:
         sl = sl - WIDEN_AMOUNT if direction == BUY else sl + WIDEN_AMOUNT
@@ -56,7 +57,10 @@ def _build(direction: str, order_kind: str, entry_ref: float,
     dist = abs(entry_ref - sl)
     tp = entry_ref + dist * rr if direction == BUY else entry_ref - dist * rr
 
-    risk_usd = balance * (risk_pct / 100.0)
+    if risk_usd_override is not None:
+        risk_usd = risk_usd_override
+    else:
+        risk_usd = balance * (risk_pct / 100.0)
     lots = _lots(risk_usd, dist, usd_per_point_per_lot, min_lots, lot_step)
 
     return TradePlan(
@@ -69,28 +73,37 @@ def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,
                 risk_pct: float, balance: float,
                 usd_per_point_per_lot: float = 100.0,
                 min_lots: float = 0.01,
-                lot_step: float = 0.01) -> TradePlan:
+                lot_step: float = 0.01,
+                risk_usd: Optional[float] = None) -> TradePlan:
     """Market order: entry reference is the side MT5/cTrader actually fills.
 
     Direction is inferred against the mid-price (bash parity), then the
     math entry becomes ask for BUY, bid for SELL.
+
+    risk_usd overrides the percentage-based risk (dollar mode): when set,
+    risk_pct is ignored and the exact dollar amount is used.
     """
     mid = (bid + ask) / 2.0
     direction = BUY if sl < mid else SELL
     entry_ref = ask if direction == BUY else bid
     return _build(direction, MARKET, entry_ref, None, sl, widen, rr,
                   risk_pct, balance, ask - bid,
-                  usd_per_point_per_lot, min_lots, lot_step)
+                  usd_per_point_per_lot, min_lots, lot_step,
+                  risk_usd_override=risk_usd)
 
 
 def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
                  rr: float, risk_pct: float, balance: float,
                  usd_per_point_per_lot: float = 100.0,
                  min_lots: float = 0.01,
-                 lot_step: float = 0.01) -> TradePlan:
+                 lot_step: float = 0.01,
+                 risk_usd: Optional[float] = None) -> TradePlan:
     """Pending order: math on the user's raw entry; placement price is
     spread-offset (BUY above, SELL below); LIMIT/STOP inferred from where
     the placement price sits relative to the current book.
+
+    risk_usd overrides the percentage-based risk (dollar mode): when set,
+    risk_pct is ignored and the exact dollar amount is used.
     """
     direction = BUY if sl < entry else SELL
     spread = ask - bid
@@ -104,4 +117,5 @@ def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
 
     return _build(direction, order_kind, entry, placement, sl, widen, rr,
                   risk_pct, balance, spread,
-                  usd_per_point_per_lot, min_lots, lot_step)
+                  usd_per_point_per_lot, min_lots, lot_step,
+                  risk_usd_override=risk_usd)

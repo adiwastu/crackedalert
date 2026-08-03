@@ -120,6 +120,13 @@ class MarketData:
         """Every symbol name the account offers (empty before first fetch)."""
         return self._all_names.get(account_id, set())
 
+    def symbol_name(self, account_id: int, symbol_id: int) -> Optional[str]:
+        """Reverse lookup: symbolId -> name, from the cached metadata."""
+        for name, info in self._symbols.get(account_id, {}).items():
+            if info.symbol_id == symbol_id:
+                return name
+        return None
+
     # ------------------------------------------------------------------
     # subscriptions & quotes
     # ------------------------------------------------------------------

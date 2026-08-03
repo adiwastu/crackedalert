@@ -6,7 +6,7 @@ invalid under parse_mode=HTML (Telegram rejects unknown tags -- that
 message silently never arrived). We say [ID] instead.
 """
 
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from ..alerts import CROSSING_UP, Alert
 
@@ -64,37 +64,62 @@ def account_not_found(account: str) -> str:
     return "error: account '%s' not found." % account
 
 
-def help_text(account_codes: Iterable[str]) -> str:
-    return ("cracked alert commands:\n\n"
-            "market execution:\n"
-            "/m [sl] [widen:y/n] [rr] [risk%%] [account]\n"
-            "example: /m 2440.00 y 2 0.5 10k\n\n"
-            "pending execution:\n"
-            "/p [entry] [sl] [widen:y/n] [rr] [risk%%] [account]\n"
-            "example: /p 2450.00 2455.00 n 3 1 5k\n\n"
-            "set alert:\n"
-            "/alert [target] [notes]\n"
-            "example: /alert 2450.00 approaching demand\n\n"
-            "utilities:\n"
-            "/list — shows active alerts\n"
-            "/cancel [id] — deletes alert\n"
-            "/help — shows this message\n\n"
-            "accounts: %s" % " | ".join(account_codes))
+def help_text(account_codes: Iterable[str],
+              balances: Optional[dict] = None) -> str:
+    lines = [
+        "cracked alert commands:",
+        "",
+        "market execution:",
+        "/m [sl] [widen:y/n] [rr] [risk%] [account]",
+        "example: /m 2440.00 y 2 0.5 10k",
+        "",
+        "pending execution:",
+        "/p [entry] [sl] [widen:y/n] [rr] [risk%] [account]",
+        "example: /p 2450.00 2455.00 n 3 1 5k",
+        "",
+        "set alert:",
+        "/alert [target] [notes]",
+        "example: /alert 2450.00 approaching demand",
+        "",
+        "utilities:",
+        "/list — shows active alerts",
+        "/cancel [id] — deletes alert",
+        "/orders [account] — shows working orders",
+        "/positions [account] — shows open positions",
+        "/help — shows this message",
+        "",
+        "accounts: %s" % " | ".join(account_codes),
+    ]
+    if balances:
+        parts = []
+        for code in account_codes:
+            bal = balances.get(code)
+            parts.append("%s: %s" % (code, "?" if bal is None
+                                     else _trim(bal)))
+        lines.append("balances: %s" % " | ".join(parts))
+    return "\n".join(lines)
 
 
 def order_success(ticket, symbol: str, direction: str, kind_label: str,
                   account: str, lots: float, risk_pct: float, risk_usd: float,
                   entry_label: str, sl: float, tp: float, rr: float,
-                  widen_label: str, digits: int = 2) -> str:
+                  widen_label: str, digits: int = 2,
+                  dollar_risk: bool = False) -> str:
+    if dollar_risk:
+        risk_line = "lots: %.2f ($%.2f risk = %s%%)" % (
+            lots, risk_usd, _trim(risk_pct))
+    else:
+        risk_line = "lots: %.2f (%s%% risk = $%.2f)" % (
+            lots, _trim(risk_pct), risk_usd)
     return ("order placed (ticket: #%s)\n"
             "%s - %s %s (%s)\n"
-            "lots: %.2f (%s%% risk = $%.2f)\n\n"
+            "%s\n\n"
             "entry: %s\n"
             "sl: %.*f%s\n"
             "tp: %.*f (1:%s RR)"
             % (ticket if ticket is not None else "?",
                symbol, direction, kind_label, account,
-               lots, _trim(risk_pct), risk_usd,
+               risk_line,
                entry_label,
                digits, sl, widen_label,
                digits, tp, _trim(rr)))
@@ -121,6 +146,38 @@ def trade_usage(is_market: bool) -> str:
     if is_market:
         return "⚠️ Usage: /m [sl] [widen:y/n] [rr] [risk%] [account]"
     return "⚠️ Usage: /p [entry] [sl] [widen:y/n] [rr] [risk%] [account]"
+
+
+def positions_usage(is_positions: bool) -> str:
+    cmd = "/positions" if is_positions else "/orders"
+    return "⚠️ Usage: %s [account]" % cmd
+
+
+def positions_error(account: str, reason: str) -> str:
+    return "error: could not fetch for %s: %s" % (account, reason)
+
+
+def positions_list(rows: List[dict], is_positions: bool) -> str:
+    if not rows:
+        return "no open positions." if is_positions else "no working orders."
+    label = "open positions:" if is_positions else "working orders:"
+    lines = [label]
+    for r in rows:
+        side = r.get("side") or "?"
+        vol = r.get("volume")
+        vol_text = "%.2f" % vol if vol is not None else "?"
+        price = r.get("price")
+        price_text = _trim(price) if price is not None else "?"
+        sl = r.get("sl")
+        tp = r.get("tp")
+        sl_text = _trim(sl) if sl is not None else "-"
+        tp_text = _trim(tp) if tp is not None else "-"
+        extra = r.get("extra") or ""
+        extra_text = " [%s]" % extra if extra else ""
+        lines.append("(%s)  %s %s %s @ %s  sl:%s tp:%s%s"
+                     % (r.get("id"), side, r.get("symbol"), vol_text,
+                        price_text, sl_text, tp_text, extra_text))
+    return "\n".join(lines)
 
 
 def _trim(value: float) -> str:

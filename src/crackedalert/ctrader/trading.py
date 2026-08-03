@@ -110,7 +110,8 @@ class TradingService:
         self._markets = markets      # env -> MarketData
         self._settings = settings
 
-    async def execute(self, args, is_market: bool):
+    async def execute(self, args, is_market: bool,
+                      risk_usd: Optional[float] = None):
         """Returns (plan, symbol, result, lots_final). Raises TradeRejected
         with a user-facing message, or CTraderError from the wire."""
         account = self._settings.accounts.get(args.account)
@@ -153,12 +154,13 @@ class TradingService:
         if is_market:
             plan = risk.plan_market(
                 quote.bid, quote.ask, args.sl, args.widen, args.rr,
-                args.risk_pct, balance, usd_per_point_per_lot=usd_per_point)
+                args.risk_pct, balance, usd_per_point_per_lot=usd_per_point,
+                risk_usd=risk_usd)
         else:
             plan = risk.plan_pending(
                 quote.bid, quote.ask, args.entry, args.sl, args.widen,
                 args.rr, args.risk_pct, balance,
-                usd_per_point_per_lot=usd_per_point)
+                usd_per_point_per_lot=usd_per_point, risk_usd=risk_usd)
 
         if plan.lots <= 0:
             raise TradeRejected(
@@ -170,3 +172,97 @@ class TradingService:
         log.info("placing order: %r", payload)
         result = await place_order(cli, payload)
         return plan, symbol, result, volume_to_lots(volume, symbol)
+
+    # ------------------------------------------------------------------
+    # account balance (for /help)
+    # ------------------------------------------------------------------
+    async def balance(self, shortcode: str) -> float:
+        account = self._settings.accounts.get(shortcode)
+        if account is None:
+            raise TradeRejected("error: account '%s' not found." % shortcode)
+        cli = self._clients[account.environment]
+        if not cli.connected:
+            raise TradeRejected("connection down")
+        return await fetch_balance(cli, account.ctid_account_id)
+
+    # ------------------------------------------------------------------
+    # positions / working orders (ProtoOAReconcileReq)
+    # ------------------------------------------------------------------
+    async def positions_or_orders(self, account_code: str,
+                                  is_positions: bool) -> list:
+        """Fetch open positions (or working orders) for one account via
+        ProtoOAReconcileReq, which returns both position[] and order[].
+
+        Returns a list of dicts ready for formatting:
+          {id, symbol, side, volume, price, sl, tp, extra}
+        Raises TradeRejected for account/link errors, CTraderError from
+        the wire.
+        """
+        account = self._settings.accounts.get(account_code)
+        if account is None:
+            raise TradeRejected(
+                "error: account '%s' not found." % account_code)
+
+        cli = self._clients[account.environment]
+        market: MarketData = self._markets[account.environment]
+        if not cli.connected:
+            raise TradeRejected(
+                "error: cTrader %s link is down, try again shortly."
+                % account.environment)
+
+        _, payload = await cli.request(ct.PT_RECONCILE_REQ, {
+            "ctidTraderAccountId": account.ctid_account_id,
+        })
+
+        source = payload.get("position", []) if is_positions \
+            else payload.get("order", [])
+        rows = []
+        for item in source:
+            trade = item.get("tradeData", {}) or {}
+            symbol_id = int(trade.get("symbolId", 0))
+            symbol = market.symbol_name(account.ctid_account_id, symbol_id)
+            if symbol is None:
+                symbol = "#%d" % symbol_id
+            info = market._symbols.get(account.ctid_account_id, {}).get(
+                symbol.upper()) if symbol_id else None
+            if is_positions:
+                rows.append({
+                    "id": item.get("positionId"),
+                    "symbol": symbol,
+                    "side": trade.get("tradeSide"),
+                    "volume": _volume_to_lots(trade.get("volume", 0), info),
+                    "price": item.get("price"),
+                    "sl": item.get("stopLoss"),
+                    "tp": item.get("takeProfit"),
+                    "extra": _swap_label(item.get("swap"),
+                                         item.get("moneyDigits")),
+                })
+            else:
+                rows.append({
+                    "id": item.get("orderId"),
+                    "symbol": symbol,
+                    "side": trade.get("tradeSide"),
+                    "volume": _volume_to_lots(trade.get("volume", 0), info),
+                    "price": item.get("limitPrice") or item.get(
+                        "stopPrice") or item.get("executionPrice"),
+                    "sl": item.get("stopLoss"),
+                    "tp": item.get("takeProfit"),
+                    "extra": item.get("orderType"),
+                })
+        return rows
+
+
+def _volume_to_lots(volume, info) -> float:
+    """Convert protocol volume (0.01 units) to lots using symbol lotSize.
+    Falls back to raw volume/10000 if symbol metadata is unknown."""
+    if info is not None and info.lot_size:
+        return volume / info.lot_size
+    return volume / 10000.0
+
+
+def _swap_label(swap, money_digits) -> str:
+    """Format swap (moneyDigits-scaled int) to a signed currency string."""
+    if swap is None:
+        return ""
+    digits = int(money_digits or 2)
+    return "swap %+.2f" % (swap / (10 ** digits))

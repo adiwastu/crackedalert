@@ -46,6 +46,7 @@ class TradeArgs:
     rr: float
     risk_pct: float
     account: str
+    risk_usd: Optional[float] = None   # dollar amount, $ prefix; else pct
 
 
 def parse_alert(text: str, default_symbol: str,
@@ -97,17 +98,35 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
             sl, widen_raw, rr_raw, risk_raw, account = (
                 float(tokens[1]), tokens[2], tokens[3], tokens[4], tokens[5])
         rr = float(rr_raw)
-        risk_pct = float(risk_raw)
     except ValueError:
         raise ParseError("numeric argument is not a number")
 
+    # Risk: "$50" means a dollar amount, "0.5" means a percentage.
+    risk_usd = None
+    if risk_raw.startswith("$"):
+        try:
+            risk_usd = float(risk_raw[1:])
+        except ValueError:
+            raise ParseError("numeric argument is not a number")
+        risk_pct = 0.0
+    else:
+        try:
+            risk_pct = float(risk_raw)
+        except ValueError:
+            raise ParseError("numeric argument is not a number")
+        if risk_pct <= 0:
+            raise ParseError("rr and risk%% must be positive")
+
     if widen_raw.lower() not in ("y", "n"):
         raise ParseError("widen must be y or n")
-    if rr <= 0 or risk_pct <= 0:
+    if rr <= 0:
         raise ParseError("rr and risk%% must be positive")
+    if risk_usd is not None and risk_usd <= 0:
+        raise ParseError("risk amount must be positive")
 
     return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
-                     rr=rr, risk_pct=risk_pct, account=account)
+                     rr=rr, risk_pct=risk_pct, account=account,
+                     risk_usd=risk_usd)
 
 
 def _is_number(token: str) -> bool:
@@ -139,6 +158,8 @@ class Handlers:
         app.add_handler(CommandHandler("help", self.help_))
         app.add_handler(CommandHandler("m", self.market_order))
         app.add_handler(CommandHandler("p", self.pending_order))
+        app.add_handler(CommandHandler("orders", self.orders))
+        app.add_handler(CommandHandler("positions", self.positions))
 
     def _allowed(self, update: Update) -> bool:
         chat = update.effective_chat
@@ -205,8 +226,51 @@ class Handlers:
                     _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return
-        await self._reply(update,
-                          fmt.help_text(self._settings.accounts.keys()))
+        balances = {}
+        if self._trader is not None:
+            for shortcode in self._settings.accounts:
+                try:
+                    balances[shortcode] = await self._trader.balance(
+                        shortcode)
+                except (TradeRejected, CTraderError, Exception):
+                    balances[shortcode] = None
+        await self._reply(
+            update, fmt.help_text(self._settings.accounts.keys(), balances))
+
+    async def orders(self, update: Update,
+                     _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._positions_or_orders(update, is_positions=False)
+
+    async def positions(self, update: Update,
+                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._positions_or_orders(update, is_positions=True)
+
+    async def _positions_or_orders(self, update: Update,
+                                   is_positions: bool) -> None:
+        if not self._allowed(update):
+            return
+        tokens = update.effective_message.text.split()
+        if len(tokens) < 2:
+            await self._reply(
+                update, fmt.positions_usage(is_positions))
+            return
+        account = tokens[1]
+        try:
+            rows = await self._trader.positions_or_orders(
+                account, is_positions)
+        except TradeRejected as e:
+            await self._reply(update, str(e))
+            return
+        except CTraderError as e:
+            await self._reply(update, fmt.positions_error(
+                account, e.description))
+            return
+        except Exception:
+            log.exception("positions/orders fetch failed")
+            await self._reply(update, fmt.positions_error(
+                account, "internal error"))
+            return
+        await self._reply(update, fmt.positions_list(rows, is_positions))
 
     async def market_order(self, update: Update,
                            _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,7 +292,7 @@ class Handlers:
         kind_label = "MARKET" if is_market else "PENDING"
         try:
             plan, symbol, result, lots = await self._trader.execute(
-                args, is_market)
+                args, is_market, risk_usd=args.risk_usd)
         except TradeRejected as e:
             await self._reply(update, str(e))
             return
@@ -257,4 +321,5 @@ class Handlers:
             account=args.account, lots=lots, risk_pct=args.risk_pct,
             risk_usd=plan.risk_usd, entry_label=entry_label,
             sl=plan.sl, tp=plan.tp, rr=args.rr,
-            widen_label=plan.widen_label, digits=symbol.digits))
+            widen_label=plan.widen_label, digits=symbol.digits,
+            dollar_risk=args.risk_usd is not None))

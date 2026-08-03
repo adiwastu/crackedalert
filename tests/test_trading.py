@@ -82,6 +82,22 @@ class FakeClient:
     def __init__(self):
         self.connected = True
         self.orders = []
+        self.reconcile_payload = {
+            "position": [
+                {"positionId": 1,
+                 "tradeData": {"symbolId": 41, "volume": 400,
+                               "tradeSide": "BUY"},
+                 "price": 2450.0, "stopLoss": 2439.0, "takeProfit": 2472.0,
+                 "swap": -120, "moneyDigits": 2},
+            ],
+            "order": [
+                {"orderId": 7,
+                 "tradeData": {"symbolId": 41, "volume": 2000,
+                               "tradeSide": "BUY"},
+                 "orderType": "LIMIT", "limitPrice": 2400.2,
+                 "stopLoss": 2395.0, "takeProfit": 2415.0},
+            ],
+        }
 
     def add_event_handler(self, *_):
         pass
@@ -95,15 +111,24 @@ class FakeClient:
             return ct.PT_EXECUTION_EVENT, {
                 "executionType": "ORDER_ACCEPTED",
                 "order": {"orderId": 555}}
+        if payload_type == ct.PT_RECONCILE_REQ:
+            return ct.PT_RECONCILE_RES, self.reconcile_payload
         raise AssertionError("unexpected request %s" % payload_type)
 
 
 class FakeMarket:
     def __init__(self, quote):
         self._quote = quote
+        self._symbols = {111: {"XAUUSD": XAU}}
 
     async def ensure_quote(self, account_id, symbol_name):
         return XAU, self._quote
+
+    def symbol_name(self, account_id, symbol_id):
+        for name, info in self._symbols.get(account_id, {}).items():
+            if info.symbol_id == symbol_id:
+                return name
+        return None
 
 
 def make_settings():
@@ -174,6 +199,49 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["limitPrice"], 2400.2)   # entry + 0.2 spread
         self.assertEqual(sent["stopLoss"], 2395.0)
         self.assertEqual(sent["takeProfit"], 2415.0)   # math on raw entry
+
+    def test_dollar_risk_executes_exact_amount(self):
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.0, account="demo", risk_usd=50.0)
+        plan, symbol, result, lots = run(self.service.execute(
+            args, True, risk_usd=args.risk_usd))
+        self.assertAlmostEqual(plan.risk_usd, 50.0)
+        self.assertAlmostEqual(lots, 0.05)   # 50/(10*100), dist=10
+
+    def test_balance(self):
+        bal = run(self.service.balance("demo"))
+        self.assertAlmostEqual(bal, 10000.0)   # 1000000 / 10^2
+
+    def test_balance_unknown_account(self):
+        with self.assertRaises(trading.TradeRejected):
+            run(self.service.balance("nope"))
+
+    def test_positions(self):
+        rows = run(self.service.positions_or_orders("demo", True))
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["id"], 1)
+        self.assertEqual(row["symbol"], "XAUUSD")
+        self.assertEqual(row["side"], "BUY")
+        self.assertAlmostEqual(row["volume"], 0.04)   # 400 / 10000
+        self.assertAlmostEqual(row["price"], 2450.0)
+        self.assertAlmostEqual(row["sl"], 2439.0)
+        self.assertAlmostEqual(row["tp"], 2472.0)
+        self.assertIn("swap", row["extra"])
+
+    def test_orders(self):
+        rows = run(self.service.positions_or_orders("demo", False))
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["id"], 7)
+        self.assertEqual(row["symbol"], "XAUUSD")
+        self.assertAlmostEqual(row["volume"], 0.2)   # 2000 / 10000
+        self.assertAlmostEqual(row["price"], 2400.2)
+        self.assertEqual(row["extra"], "LIMIT")
+
+    def test_positions_unknown_account(self):
+        with self.assertRaises(trading.TradeRejected):
+            run(self.service.positions_or_orders("nope", True))
 
 
 class SuccessMessageFormat(unittest.TestCase):

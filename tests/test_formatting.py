@@ -23,6 +23,21 @@ class AllFormattersRunWithoutRaising(unittest.TestCase):
         text = fmt.help_text(["live"])
         self.assertIn("accounts: live", text)
 
+    def test_help_text_with_balances(self):
+        text = fmt.help_text(["5k", "demo"],
+                             balances={"5k": 1234.5, "demo": 1001113.25})
+        self.assertIn("balances: 5k: 1234.5 | demo: 1001113.25", text)
+
+    def test_help_text_balance_failure_shows_question_mark(self):
+        text = fmt.help_text(["5k", "demo"],
+                             balances={"5k": None, "demo": 100.0})
+        self.assertIn("5k: ?", text)
+        self.assertIn("demo: 100", text)
+
+    def test_help_text_no_balances_no_line(self):
+        text = fmt.help_text(["5k"])
+        self.assertNotIn("balances:", text)
+
     def test_trade_usage(self):
         self.assertIn("[risk%]", fmt.trade_usage(True))
         self.assertIn("[risk%]", fmt.trade_usage(False))
@@ -51,6 +66,51 @@ class AllFormattersRunWithoutRaising(unittest.TestCase):
             entry_label="2450.00", sl=2439.0, tp=2472.0, rr=2.0,
             widen_label="", digits=2)
         self.assertIn("0.5% risk", text)
+
+    def test_order_success_dollar_risk(self):
+        text = fmt.order_success(
+            ticket=1, symbol="XAUUSD", direction="BUY", kind_label="MARKET",
+            account="demo", lots=0.04, risk_pct=0.0, risk_usd=50.0,
+            entry_label="2450.00", sl=2439.0, tp=2472.0, rr=2.0,
+            widen_label="", digits=2, dollar_risk=True)
+        self.assertIn("$50.00 risk", text)
+        self.assertIn("lots: 0.04", text)
+
+    def test_positions_list_empty(self):
+        self.assertEqual(fmt.positions_list([], True), "no open positions.")
+        self.assertEqual(fmt.positions_list([], False), "no working orders.")
+
+    def test_positions_list_rows(self):
+        rows = [
+            {"id": 1, "side": "BUY", "symbol": "XAUUSD", "volume": 0.04,
+             "price": 2450.0, "sl": 2439.0, "tp": 2472.0,
+             "extra": "swap -1.20"},
+            {"id": 2, "side": "SELL", "symbol": "XAUUSD", "volume": 0.1,
+             "price": 2400.0, "sl": None, "tp": None, "extra": ""},
+        ]
+        text = fmt.positions_list(rows, True)
+        self.assertIn("open positions:", text)
+        self.assertIn("(1)  BUY XAUUSD 0.04 @ 2450  sl:2439 tp:2472", text)
+        self.assertIn("(2)  SELL XAUUSD 0.10 @ 2400  sl:- tp:-", text)
+
+    def test_orders_list_rows(self):
+        rows = [
+            {"id": 7, "side": "BUY", "symbol": "XAUUSD", "volume": 0.2,
+             "price": 2400.2, "sl": 2395.0, "tp": 2415.0,
+             "extra": "LIMIT"},
+        ]
+        text = fmt.positions_list(rows, False)
+        self.assertIn("working orders:", text)
+        self.assertIn("(7)  BUY XAUUSD 0.20 @ 2400.2  sl:2395 tp:2415", text)
+        self.assertIn("[LIMIT]", text)
+
+    def test_positions_usage(self):
+        self.assertIn("/positions", fmt.positions_usage(True))
+        self.assertIn("/orders", fmt.positions_usage(False))
+
+    def test_positions_error(self):
+        self.assertIn("demo", fmt.positions_error("demo", "boom"))
+        self.assertIn("boom", fmt.positions_error("demo", "boom"))
 
     def test_order_failed(self):
         text = fmt.order_failed("XAUUSD", "BUY", "MARKET", "demo",

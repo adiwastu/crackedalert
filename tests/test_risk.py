@@ -102,5 +102,29 @@ class LotEdgeCases(unittest.TestCase):
         self.assertLessEqual(risk_at_sl, p.risk_usd + 1e-9)
 
 
+class DollarRisk(unittest.TestCase):
+    def test_dollar_override_ignores_balance(self):
+        # $50 risk on a $1M balance: same lots as $50 on $10k balance
+        p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
+                             rr=2, risk_pct=99, balance=1000000,
+                             risk_usd=50.0)
+        self.assertAlmostEqual(p.risk_usd, 50.0)
+        self.assertAlmostEqual(p.lots, 0.05)   # 50/(10*100), dist=10
+
+    def test_dollar_override_pending(self):
+        p = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2395.0,
+                              widen=False, rr=3, risk_pct=99, balance=1,
+                              risk_usd=100.0)
+        self.assertAlmostEqual(p.risk_usd, 100.0)
+        self.assertAlmostEqual(p.lots, 0.2)    # 100/(5*100)
+
+    def test_dollar_override_zero_balance_still_works(self):
+        # balance is irrelevant in dollar mode
+        p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
+                             rr=1, risk_pct=0, balance=0, risk_usd=25.0)
+        self.assertAlmostEqual(p.risk_usd, 25.0)
+        self.assertGreater(p.lots, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
