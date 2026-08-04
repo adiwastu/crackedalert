@@ -11,12 +11,14 @@ import signal
 import sys
 from typing import Dict, Optional, Set, Tuple
 
+from telegram import BotCommand
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
 from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
                      CandleAlertStore)
 from .bot import formatting as fmt
+from .bot.formatting import BOT_COMMANDS
 from .bot.handlers import Handlers
 from .config import ConfigError, Settings, load_settings
 from .ctrader import client as ct
@@ -171,9 +173,13 @@ async def _run_bot(settings: Settings) -> None:
                         candle_feed=candle_feed)
     handlers.register(app)
 
+    # P2: native command menu
+    await app.bot.set_my_commands(
+        [BotCommand(c, d) for c, d in BOT_COMMANDS])
+
     async def on_token_failure(reason: str) -> None:
         await notify(settings.allowed_chat_ids[0],
-                     "⚠️ cTrader token refresh failed: %s\n"
+                     "\u26a0\ufe0f cTrader token refresh failed: %s\n"
                      "re-run auth_setup.py on the VPS." % reason)
 
     refresh_task = asyncio.get_running_loop().create_task(

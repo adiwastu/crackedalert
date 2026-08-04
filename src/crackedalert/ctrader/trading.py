@@ -202,7 +202,8 @@ class TradingService:
         ProtoOAReconcileReq, which returns both position[] and order[].
 
         Returns a list of dicts ready for formatting:
-          {id, symbol, side, volume, price, sl, tp, extra}
+          {id, symbol, side, volume, price, sl, tp, extra,
+           current_price, contract_size}
         Raises TradeRejected for account/link errors, CTraderError from
         the wire.
         """
@@ -233,29 +234,47 @@ class TradingService:
                 symbol = "#%d" % symbol_id
             info = market._symbols.get(account.ctid_account_id, {}).get(
                 symbol.upper()) if symbol_id else None
+
+            # P3: current_price and contract_size for live PnL cards
+            quote = market.quote(account.ctid_account_id, symbol_id)
+            side = trade.get("tradeSide", "")
+            current_price = None
+            if quote is not None:
+                if side == "BUY":
+                    current_price = quote.ask
+                elif side == "SELL":
+                    current_price = quote.bid
+                elif quote.bid is not None and quote.ask is not None:
+                    current_price = (quote.bid + quote.ask) / 2.0
+            contract_size = info.contract_size if info is not None else 100.0
+
             if is_positions:
                 rows.append({
                     "id": item.get("positionId"),
                     "symbol": symbol,
-                    "side": trade.get("tradeSide"),
+                    "side": side,
                     "volume": _volume_to_lots(trade.get("volume", 0), info),
                     "price": item.get("price"),
                     "sl": item.get("stopLoss"),
                     "tp": item.get("takeProfit"),
                     "extra": _swap_label(item.get("swap"),
                                          item.get("moneyDigits")),
+                    "current_price": current_price,
+                    "contract_size": contract_size,
                 })
             else:
                 rows.append({
                     "id": item.get("orderId"),
                     "symbol": symbol,
-                    "side": trade.get("tradeSide"),
+                    "side": side,
                     "volume": _volume_to_lots(trade.get("volume", 0), info),
                     "price": item.get("limitPrice") or item.get(
                         "stopPrice") or item.get("executionPrice"),
                     "sl": item.get("stopLoss"),
                     "tp": item.get("takeProfit"),
                     "extra": item.get("orderType"),
+                    "current_price": current_price,
+                    "contract_size": contract_size,
                 })
         return rows
 

@@ -339,13 +339,19 @@ class SuccessMessageFormat(unittest.TestCase):
             kind_label="MARKET", account="demo", lots=0.04, risk_pct=0.5,
             risk_usd=50.0, entry_label="2450.00", sl=2439.0, tp=2472.0,
             rr=2.0, widen_label=" (tambah 10 pips)", digits=2)
-        expected = ("order placed (ticket: #555)\n"
-                    "XAUUSD - BUY MARKET (demo)\n"
-                    "lots: 0.04 (0.5% risk = $50.00)\n\n"
-                    "entry: 2450.00\n"
-                    "sl: 2439.00 (tambah 10 pips)\n"
-                    "tp: 2472.00 (1:2 RR)")
-        self.assertEqual(text, expected)
+        # New HTML template includes side glyph and <code> wrappers
+        self.assertIn("BUY XAUUSD", text)
+        self.assertIn("MARKET", text)
+        self.assertIn("demo", text)
+        self.assertIn("2450.00", text)
+        self.assertIn("2439.00 (tambah 10 pips)", text)
+        self.assertIn("2472.00", text)
+        self.assertIn("0.04", text)
+        self.assertIn("0.5% risk", text)
+        self.assertIn("$50.00", text)
+        self.assertIn("RR 1:2", text)
+        self.assertIn("ticket #555", text)
+        self.assertIn("<code>", text)
 
 
 if __name__ == "__main__":

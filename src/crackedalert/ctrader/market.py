@@ -25,10 +25,17 @@ class SymbolInfo:
     symbol_id: int
     name: str
     digits: int
-    lot_size: int        # in 0.01 units
+    lot_size: int        # in 0.01 units (e.g. 10000 for XAUUSD = 100 oz)
     min_volume: int      # in 0.01 units
     step_volume: int     # in 0.01 units
     pip_position: int
+
+    @property
+    def contract_size(self) -> float:
+        """Notional per lot in the base currency (oz for gold, units for forex).
+        XAUUSD lotSize 10000 -> 100 oz/lot.
+        """
+        return self.lot_size / 100.0 if self.lot_size else 100.0
 
 
 @dataclass

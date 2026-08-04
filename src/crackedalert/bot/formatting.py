@@ -1,17 +1,52 @@
-"""Telegram reply templates.
+"""Telegram reply templates — HTML parse_mode, mobile-first.
 
-Kept text-compatible with the bash bot so nothing changes for the user.
-One deliberate fix: the bash /cancel usage said "/cancel <ID>" which is
-invalid under parse_mode=HTML (Telegram rejects unknown tags -- that
-message silently never arrived). We say [ID] instead.
+P0: Every interpolated value is HTML-escaped at render time (quote=False)
+so user notes containing < > & never cause Telegram 400 errors.
+
+P1: Templates rewritten for expandable blockquotes, tap-to-copy <code>
+spans, and emoji side-glyphs. Function signatures are unchanged.
 """
 
+from html import escape as _html_escape
 from typing import Iterable, List, Optional
 
 from ..alerts import (CANDLE_ABOVE, CANDLE_BELOW, CROSSING_UP, Alert,
                       CandleAlert)
 from .. import version as bot_version
 
+
+# --------------------------------------------------------------------------
+# escaping
+# --------------------------------------------------------------------------
+
+def esc(value) -> str:
+    """HTML-escape a value for Telegram's HTML parse_mode.
+
+    quote=False on purpose: Telegram only requires <, > and & to be escaped.
+    Escaping quotes would emit &#x27; which Telegram does not decode, so an
+    apostrophe in a note would render literally as "&#x27;".
+
+    Escape at RENDER time, never at input time. Escaping on the way into the
+    database means you can't reuse the value anywhere else without
+    double-escaping it.
+    """
+    if value is None:
+        return ""
+    return _html_escape(str(value), quote=False)
+
+
+def _side_glyph(side) -> str:
+    s = (str(side or "")).upper()
+    if s.startswith("BUY"):
+        return "\U0001F7E2"   # green circle
+    if s.startswith("SELL"):
+        return "\U0001F534"   # red circle
+    return "\u26AA"           # white circle
+
+
+# --------------------------------------------------------------------------
+# alert set
+# --------------------------------------------------------------------------
 
 def alert_set(alert: Alert, live_price: float) -> str:
     relation = "lower" if alert.direction == CROSSING_UP else "higher"
@@ -20,30 +55,107 @@ def alert_set(alert: Alert, live_price: float) -> str:
             "%s\n\n"
             "Notes: %s\n"
             "current price (%s) is now %s than target."
-            % (alert.id, alert.symbol, _trim(alert.target), alert.message,
-               _trim(live_price), relation))
+            % (esc(alert.id), esc(alert.symbol), _trim(alert.target),
+               esc(alert.message), _trim(live_price), esc(relation)))
 
+
+# --------------------------------------------------------------------------
+# alert fired
+# --------------------------------------------------------------------------
 
 def alert_fired(alert: Alert) -> str:
-    return ("cracked alert hit! (id:%s)\n"
-            "price hits %s.\n"
-            "notes: %s" % (alert.id, _trim(alert.target), alert.message))
+    up = "UP" in (getattr(alert, "direction", "") or "").upper()
+    arrow = "\U0001F53A" if up else "\U0001F53B"   # up / down triangle
+
+    lines = [
+        "%s <b>%s</b> hit <code>%s</code>" % (
+            arrow,
+            esc(getattr(alert, "symbol", None) or "?"),
+            esc(_trim(alert.target)),
+        )
+    ]
+    if getattr(alert, "message", None):
+        lines.append("<blockquote>%s</blockquote>" % esc(alert.message))
+    lines.append("<i>alert %s</i>" % esc(alert.id))
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# usage builder
+# --------------------------------------------------------------------------
+
+def usage(command: str, args: str = "", example: str = "") -> str:
+    """The <code> wrapper matters: tapping a code span in Telegram copies it.
+    On a phone the user taps the example, pastes, edits two numbers, sends.
+    """
+    lines = [
+        "\u26A0\ufe0f <b>Usage</b>",
+        "<code>%s %s</code>" % (esc(command), esc(args)) if args
+        else "<code>%s</code>" % esc(command),
+    ]
+    if example:
+        lines.append("<i>example</i>  <code>%s</code>" % esc(example))
+    return "\n".join(lines)
 
 
 def alert_usage() -> str:
-    return "⚠️ <b>Usage:</b> /alert 2450.00 XAUUSD Approaching support"
+    return usage("/alert", "[target] [notes]",
+                 "/alert 2450.00 approaching demand")
 
 
 def cancel_usage() -> str:
-    return "⚠️ Usage: /cancel [ID]"
+    return usage("/cancel", "[id]", "/cancel 42O4")
 
+
+def trade_usage(is_market: bool) -> str:
+    if is_market:
+        return usage("/m", "[sl] [widen:y/n] [rr] [risk%] [account]",
+                     "/m 2440.00 y 2 0.5 10k")
+    return usage("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account]",
+                 "/p 2450.00 2455.00 n 3 1 5k")
+
+
+def positions_usage(is_positions: bool) -> str:
+    cmd = "/positions" if is_positions else "/orders"
+    return usage(cmd, "[account]", "%s live100k" % cmd)
+
+
+def close_usage() -> str:
+    return usage("/close", "[id] [account]", "/close 4467051 live100k")
+
+
+def close_all_usage() -> str:
+    return usage("/close_all", "[account]", "/close_all live100k")
+
+
+def cancel_order_usage() -> str:
+    return usage("/cancel_order", "[id] [account]",
+                 "/cancel_order 4467051 live100k")
+
+
+def breakeven_usage() -> str:
+    return usage("/be", "[account]", "/be live100k")
+
+
+def candle_alert_usage() -> str:
+    return usage("/ccalert", "[tf] [price] [above|below] [symbol] [notes]",
+                 "/ccalert M15 2450 above XAUUSD breakout")
+
+
+def candle_cancel_usage() -> str:
+    return usage("/cccancel", "[id]", "/cccancel 3")
+
+
+# --------------------------------------------------------------------------
+# cancelled / not-found / no-alerts
+# --------------------------------------------------------------------------
 
 def cancelled(alert_id: str) -> str:
-    return "alert %s cancelled." % alert_id
+    return "alert %s cancelled." % esc(alert_id)
 
 
 def cancel_not_found(alert_id: str) -> str:
-    return "id %s not found or doesn't belong to you." % alert_id
+    return "id %s not found or doesn't belong to you." % esc(alert_id)
 
 
 def no_alerts() -> str:
@@ -54,90 +166,118 @@ def alert_list(alerts: List[Alert]) -> str:
     lines = ["active alerts:"]
     for a in alerts:
         lines.append("(%s)  %s @ %s - %s"
-                     % (a.id, a.symbol, _trim(a.target), a.message))
+                     % (esc(a.id), esc(a.symbol), _trim(a.target),
+                        esc(a.message)))
     return "\n".join(lines)
 
 
 def price_fetch_error(symbol: str) -> str:
-    return "❌ API Error: Could not fetch live price for %s." % symbol
+    return "\u274C API Error: Could not fetch live price for %s." % esc(symbol)
 
 
 def account_not_found(account: str) -> str:
-    return "error: account '%s' not found." % account
+    return "error: account '%s' not found." % esc(account)
+
+
+# --------------------------------------------------------------------------
+# help
+# --------------------------------------------------------------------------
+
+_HELP_SECTIONS = [
+    ("execute", [
+        ("/m", "[sl] [widen:y/n] [rr] [risk%] [account]",
+         "/m 2440.00 y 2 0.5 10k"),
+        ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account]",
+         "/p 2450.00 2455.00 n 3 1 5k"),
+    ]),
+    ("manage", [
+        ("/be", "[account]", "move SL to breakeven + spread"),
+        ("/close", "[id] [account]", "closes one position"),
+        ("/close_all", "[account]", "closes all positions"),
+        ("/cancel_order", "[id] [account]", "cancels one pending order"),
+    ]),
+    ("alerts", [
+        ("/alert", "[target] [notes]", "/alert 2450.00 approaching demand"),
+        ("/ccalert", "[tf] [price] [above|below] [symbol] [notes]",
+         "/ccalert M15 2450 above XAUUSD breakout"),
+        ("/list", "", "active alerts"),
+        ("/cancel", "[id]", "delete alert"),
+        ("/cclist", "", "active candle alerts"),
+        ("/cccancel", "[id]", "delete candle alert"),
+    ]),
+    ("info", [
+        ("/orders", "[account]", "working orders"),
+        ("/positions", "[account]", "open positions"),
+    ]),
+]
 
 
 def help_text(account_codes: Iterable[str],
               balances: Optional[dict] = None) -> str:
-    lines = [
-        "cracked alert commands:",
-        "",
-        "market execution:",
-        "/m [sl] [widen:y/n] [rr] [risk%] [account]",
-        "example: /m 2440.00 y 2 0.5 10k",
-        "",
-        "pending execution:",
-        "/p [entry] [sl] [widen:y/n] [rr] [risk%] [account]",
-        "example: /p 2450.00 2455.00 n 3 1 5k",
-        "",
-        "position management:",
-        "/close_all [account] — closes all positions",
-        "/close [id] [account] — closes one position",
-        "/cancel_order [id] [account] — cancels one pending order",
-        "/be [account] — move SL to breakeven + spread",
-        "",
-        "set alert:",
-        "/alert [target] [notes]",
-        "example: /alert 2450.00 approaching demand",
-        "",
-        "candle close alerts:",
-        "/ccalert [tf] [price] [above|below] [symbol] [notes]",
-        "example: /ccalert M15 2450 above XAUUSD breakout",
-        "/cclist — shows active candle alerts",
-        "/cccancel [id] — deletes a candle alert",
-        "",
-        "utilities:",
-        "/list — shows active alerts",
-        "/cancel [id] — deletes alert",
-        "/orders [account] — shows working orders",
-        "/positions [account] — shows open positions",
-        "/help — shows this message",
-        "",
-        "accounts: %s" % " | ".join(account_codes),
-    ]
-    if balances:
-        parts = []
-        for code in account_codes:
-            bal = balances.get(code)
-            parts.append("%s: %s" % (code, "?" if bal is None
-                                     else _trim(bal)))
-        lines.append("balances: %s" % " | ".join(parts))
-    lines.append("cracked alert %s" % bot_version())
+    codes = list(account_codes)
+    lines = ["<b>cracked alert</b>", ""]
+
+    for title, cmds in _HELP_SECTIONS:
+        body = []
+        for cmd, args, note in cmds:
+            head = "<code>%s %s</code>" % (esc(cmd), esc(args)) if args \
+                else "<code>%s</code>" % esc(cmd)
+            body.append(head)
+            if note:
+                body.append("   <i>%s</i>" % esc(note))
+        lines.append("<b>%s</b>" % esc(title))
+        lines.append("<blockquote expandable>%s</blockquote>"
+                     % "\n".join(body))
+        lines.append("")
+
+    lines.append("<b>accounts</b>")
+    acct_lines = []
+    for code in codes:
+        if balances and balances.get(code) is not None:
+            acct_lines.append("<code>%s</code>  %s" % (
+                esc(code), esc(_trim(balances[code]))))
+        else:
+            acct_lines.append("<code>%s</code>" % esc(code))
+    lines.append("\n".join(acct_lines))
+    lines.append("")
+    lines.append("<i>%s</i>" % esc(bot_version()))
     return "\n".join(lines)
 
+
+# --------------------------------------------------------------------------
+# order placed
+# --------------------------------------------------------------------------
 
 def order_success(ticket, symbol: str, direction: str, kind_label: str,
                   account: str, lots: float, risk_pct: float, risk_usd: float,
                   entry_label: str, sl: float, tp: float, rr: float,
                   widen_label: str, digits: int = 2,
                   dollar_risk: bool = False) -> str:
+
     if dollar_risk:
-        risk_line = "lots: %.2f ($%.2f risk = %s%%)" % (
-            lots, risk_usd, _trim(risk_pct))
+        risk_text = "<code>$%.2f</code> risk = %s%%" % (
+            risk_usd, esc(_trim(risk_pct)))
     else:
-        risk_line = "lots: %.2f (%s%% risk = $%.2f)" % (
-            lots, _trim(risk_pct), risk_usd)
-    return ("order placed (ticket: #%s)\n"
-            "%s - %s %s (%s)\n"
-            "%s\n\n"
-            "entry: %s\n"
-            "sl: %.*f%s\n"
-            "tp: %.*f (1:%s RR)"
-            % (ticket if ticket is not None else "?",
-               symbol, direction, kind_label, account,
-               risk_line,
-               entry_label,
-               digits, sl, widen_label,
-               digits, tp, _trim(rr)))
+        risk_text = "%s%% risk = <code>$%.2f</code>" % (
+            esc(_trim(risk_pct)), risk_usd)
+
+    sl_text = "%.*f" % (digits, sl)
+    if widen_label:
+        sl_text = "%s%s" % (sl_text, esc(widen_label))
+
+    return "\n".join([
+        "\u2705 %s <b>%s %s</b> \u00b7 %s \u00b7 %s" % (
+            _side_glyph(direction), esc(direction), esc(symbol),
+            esc(kind_label), esc(account)),
+        "",
+        "entry <code>%s</code>" % esc(entry_label),
+        "SL <code>%s</code> \u00b7 TP <code>%.*f</code>" % (
+            sl_text, digits, tp),
+        "<code>%.2f</code> lots \u00b7 %s \u00b7 RR 1:%s" % (
+            lots, risk_text, esc(_trim(rr))),
+        "",
+        "<i>ticket #%s</i>" % esc(ticket if ticket is not None else "?"),
+    ])
 
 
 def order_failed(symbol: str, direction: str, kind_label: str, account: str,
@@ -145,7 +285,8 @@ def order_failed(symbol: str, direction: str, kind_label: str, account: str,
     return ("order failed (%s)\n"
             "%s - %s %s\n"
             "reason: %s (retcode: %s)"
-            % (account, symbol, direction, kind_label, reason, retcode))
+            % (esc(account), esc(symbol), esc(direction), esc(kind_label),
+               esc(reason), esc(retcode)))
 
 
 def entry_label_market(entry_ref: float, digits: int = 2) -> str:
@@ -157,93 +298,89 @@ def entry_label_pending(entry: float, placement: float,
     return "%.*f (placed at %.*f)" % (digits, entry, digits, placement)
 
 
-def trade_usage(is_market: bool) -> str:
-    if is_market:
-        return "⚠️ Usage: /m [sl] [widen:y/n] [rr] [risk%] [account]"
-    return "⚠️ Usage: /p [entry] [sl] [widen:y/n] [rr] [risk%] [account]"
-
-
-def positions_usage(is_positions: bool) -> str:
-    cmd = "/positions" if is_positions else "/orders"
-    return "⚠️ Usage: %s [account]" % cmd
-
+# --------------------------------------------------------------------------
+# positions / working orders
+# --------------------------------------------------------------------------
 
 def positions_error(account: str, reason: str) -> str:
-    return "error: could not fetch for %s: %s" % (account, reason)
+    return "error: could not fetch for %s: %s" % (esc(account), esc(reason))
 
 
 def positions_list(rows: List[dict], is_positions: bool) -> str:
     if not rows:
         return "no open positions." if is_positions else "no working orders."
-    label = "open positions:" if is_positions else "working orders:"
-    lines = [label]
+
+    head = "<b>open positions</b>" if is_positions else "<b>working orders</b>"
+    lines = [head, ""]
+
     for r in rows:
         side = r.get("side") or "?"
         vol = r.get("volume")
         vol_text = "%.2f" % vol if vol is not None else "?"
         price = r.get("price")
         price_text = _trim(price) if price is not None else "?"
-        sl = r.get("sl")
-        tp = r.get("tp")
-        sl_text = _trim(sl) if sl is not None else "-"
-        tp_text = _trim(tp) if tp is not None else "-"
-        extra = r.get("extra") or ""
-        extra_text = " [%s]" % extra if extra else ""
-        lines.append("(%s)  %s %s %s @ %s  sl:%s tp:%s%s"
-                     % (r.get("id"), side, r.get("symbol"), vol_text,
-                        price_text, sl_text, tp_text, extra_text))
-    return "\n".join(lines)
+        sl_text = _trim(r.get("sl")) if r.get("sl") is not None \
+            else "\u2013"
+        tp_text = _trim(r.get("tp")) if r.get("tp") is not None \
+            else "\u2013"
+
+        lines.append("%s <b>%s %s</b> <code>%s</code> @ <code>%s</code>" % (
+            _side_glyph(side),
+            esc(side),
+            esc(r.get("symbol") or "?"),
+            esc(vol_text),
+            esc(price_text),
+        ))
+
+        tail = "   SL <code>%s</code> \u00b7 TP <code>%s</code>" % (
+            esc(sl_text), esc(tp_text))
+        lines.append(tail)
+
+        meta = ["#%s" % esc(r.get("id"))]
+        if r.get("extra"):
+            meta.append(esc(r["extra"]))
+        lines.append("   <i>%s</i>" % " \u00b7 ".join(meta))
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
 
 
-# ----------------------------------------------------------------------
-# close_all / breakeven
-# ----------------------------------------------------------------------
-def close_all_usage() -> str:
-    return "⚠️ Usage: /close_all [account]"
-
+# --------------------------------------------------------------------------
+# close_all / close / cancel_order / breakeven
+# --------------------------------------------------------------------------
 
 def close_all_result(account: str, results: List[dict]) -> str:
     if not results:
         return "no open positions."
     ok = sum(1 for r in results if r.get("ok"))
     lines = ["closed %d/%d positions (%s):"
-             % (ok, len(results), account)]
+             % (ok, len(results), esc(account))]
     for r in results:
         vol = r.get("volume")
         vol_text = "%.2f" % vol if vol is not None else "?"
-        status = "closed" if r.get("ok") else "failed: %s" % r.get("message")
-        lines.append("(%s)  %s %s %s → %s"
-                     % (r.get("id"), r.get("side"), r.get("symbol"),
-                        vol_text, status))
+        status = "closed" if r.get("ok") else "failed: %s" % esc(
+            r.get("message", ""))
+        lines.append("(%s)  %s %s %s \u2192 %s"
+                     % (esc(r.get("id")), esc(r.get("side") or "?"),
+                        esc(r.get("symbol") or "?"),
+                        esc(vol_text), status))
     return "\n".join(lines)
 
 
-def breakeven_usage() -> str:
-    return "⚠️ Usage: /be [account]"
-
-
-def close_usage() -> str:
-    return "⚠️ Usage: /close [id] [account]"
-
-
 def close_success(account: str, position_id: int) -> str:
-    return "position %s closed (%s)." % (position_id, account)
+    return "position %s closed (%s)." % (esc(position_id), esc(account))
 
 
 def close_error(account: str, position_id: int, reason: str) -> str:
-    return "close failed (%s): %s" % (account, reason)
-
-
-def cancel_order_usage() -> str:
-    return "⚠️ Usage: /cancel_order [id] [account]"
+    return "close failed (%s): %s" % (esc(account), esc(reason))
 
 
 def cancel_order_success(account: str, order_id: int) -> str:
-    return "order %s cancelled (%s)." % (order_id, account)
+    return "order %s cancelled (%s)." % (esc(order_id), esc(account))
 
 
 def cancel_order_error(account: str, order_id: int, reason: str) -> str:
-    return "cancel failed (%s): %s" % (account, reason)
+    return "cancel failed (%s): %s" % (esc(account), esc(reason))
 
 
 def breakeven_result(account: str, results: List[dict]) -> str:
@@ -251,31 +388,28 @@ def breakeven_result(account: str, results: List[dict]) -> str:
         return "no open positions."
     ok = sum(1 for r in results if r.get("ok"))
     lines = ["breakeven set on %d/%d positions (%s):"
-             % (ok, len(results), account)]
+             % (ok, len(results), esc(account))]
     for r in results:
         vol = r.get("volume")
         vol_text = "%.2f" % vol if vol is not None else "?"
         be = r.get("be_sl")
         if r.get("ok"):
-            detail = "BE at %s" % _trim(be) if be is not None else "BE set"
+            detail = "BE at %s" % esc(_trim(be)) if be is not None \
+                else "BE set"
         else:
-            detail = "skipped — %s" % r.get("message")
+            detail = "skipped \u2014 %s" % esc(r.get("message", ""))
             if be is not None:
-                detail += " (needs %s)" % _trim(be)
-        lines.append("(%s)  %s %s %s → %s"
-                     % (r.get("id"), r.get("side"), r.get("symbol"),
-                        vol_text, detail))
+                detail += " (needs %s)" % esc(_trim(be))
+        lines.append("(%s)  %s %s %s \u2192 %s"
+                     % (esc(r.get("id")), esc(r.get("side") or "?"),
+                        esc(r.get("symbol") or "?"),
+                        esc(vol_text), detail))
     return "\n".join(lines)
 
 
-# ----------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # candle close alerts
-# ----------------------------------------------------------------------
-def candle_alert_usage() -> str:
-    return ("⚠️ <b>Usage:</b> /ccalert [tf] [price] [above|below] "
-            "[symbol] [notes]\n"
-            "timeframes: M1 M5 M15 M30 H1 H4 D1 W1 MN1")
-
+# --------------------------------------------------------------------------
 
 def candle_alert_set(alert: CandleAlert, last_close: Optional[float]) -> str:
     direction = "above" if alert.direction == CANDLE_ABOVE else "below"
@@ -283,8 +417,8 @@ def candle_alert_set(alert: CandleAlert, last_close: Optional[float]) -> str:
             "%s %s\n"
             "close %s %s\n\n"
             "Notes: %s"
-            % (alert.id, alert.symbol, alert.timeframe, direction,
-               _trim(alert.target), alert.message))
+            % (esc(alert.id), esc(alert.symbol), esc(alert.timeframe),
+               esc(direction), _trim(alert.target), esc(alert.message)))
     if last_close is not None:
         line += "\nlast closed close: %s" % _trim(last_close)
     return line
@@ -295,8 +429,8 @@ def candle_alert_fired(alert: CandleAlert) -> str:
     return ("cracked candle alert hit! (id:%s)\n"
             "%s %s closed %s %s.\n"
             "notes: %s"
-            % (alert.id, alert.symbol, alert.timeframe, direction,
-               _trim(alert.target), alert.message))
+            % (esc(alert.id), esc(alert.symbol), esc(alert.timeframe),
+               esc(direction), _trim(alert.target), esc(alert.message)))
 
 
 def candle_alert_list(alerts: List[CandleAlert]) -> str:
@@ -306,24 +440,44 @@ def candle_alert_list(alerts: List[CandleAlert]) -> str:
     for a in alerts:
         direction = "above" if a.direction == CANDLE_ABOVE else "below"
         lines.append("(%s)  %s %s close %s %s - %s"
-                     % (a.id, a.symbol, a.timeframe, direction,
-                        _trim(a.target), a.message))
+                     % (esc(a.id), esc(a.symbol), esc(a.timeframe),
+                        esc(direction), _trim(a.target), esc(a.message)))
     return "\n".join(lines)
 
 
-def candle_cancel_usage() -> str:
-    return "⚠️ Usage: /cccancel [ID]"
-
-
 def candle_cancelled(alert_id: str) -> str:
-    return "candle alert %s cancelled." % alert_id
+    return "candle alert %s cancelled." % esc(alert_id)
 
 
 def candle_cancel_not_found(alert_id: str) -> str:
-    return "id %s not found or doesn't belong to you." % alert_id
+    return "id %s not found or doesn't belong to you." % esc(alert_id)
 
+
+# --------------------------------------------------------------------------
+# helpers
+# --------------------------------------------------------------------------
 
 def _trim(value: float) -> str:
     """Render 2450.0 as the user typed it: no trailing zeros beyond 2dp."""
     text = ("%.2f" % value).rstrip("0").rstrip(".")
     return text if text else "0"
+
+
+# --------------------------------------------------------------------------
+# setMyCommands payload — call once at startup
+# --------------------------------------------------------------------------
+
+BOT_COMMANDS = [
+    ("m", "market order"),
+    ("p", "pending order"),
+    ("be", "SL to breakeven"),
+    ("close", "close a position"),
+    ("close_all", "close everything"),
+    ("cancel_order", "cancel a pending order"),
+    ("positions", "open positions"),
+    ("orders", "working orders"),
+    ("alert", "set a price alert"),
+    ("ccalert", "candle close alert"),
+    ("list", "active alerts"),
+    ("help", "full command list"),
+]
