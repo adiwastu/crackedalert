@@ -2,8 +2,9 @@
 
 Parsing lives in pure functions (unit-testable, no I/O). The Handlers
 class binds them to the live services. Every handler is gated on
-ALLOWED_CHAT_IDS -- unknown chats are logged and ignored (the bash bot
-accepted commands from anyone; that hole is closed here).
+ALLOWED_CHAT_IDS + the dynamic subscription store -- unknown chats are
+logged and ignored. /subscribe and /unsubscribe are NOT gated so anyone
+can join.
 """
 
 import logging
@@ -21,6 +22,7 @@ from ..ctrader import candles as candles_mod
 from ..ctrader.client import CTraderError
 from ..ctrader.trading import TradeRejected
 from . import formatting as fmt
+from .subscriptions import SubscriptionStore
 
 log = logging.getLogger("crackedalert.bot")
 
@@ -185,10 +187,12 @@ class Handlers:
 
     def __init__(self, settings: Settings, store: alerts_mod.AlertStore,
                  feed, trade_symbol: str, trader=None,
-                 candle_store=None, candle_feed=None):
+                 candle_store=None, candle_feed=None,
+                 subscription_store: Optional[SubscriptionStore] = None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
         # candle_store: CandleAlertStore; candle_feed: CandleFeed
+        # subscription_store: dynamic chat allow-list
         self._settings = settings
         self._store = store
         self._feed = feed
@@ -196,8 +200,13 @@ class Handlers:
         self._trader = trader
         self._candle_store = candle_store
         self._candle_feed = candle_feed
+        self._subscriptions = subscription_store
 
     def register(self, app: Application) -> None:
+        # un-gated commands
+        app.add_handler(CommandHandler("subscribe", self.subscribe))
+        app.add_handler(CommandHandler("unsubscribe", self.unsubscribe))
+        # gated commands
         app.add_handler(CommandHandler("alert", self.alert))
         app.add_handler(CommandHandler("list", self.list_))
         app.add_handler(CommandHandler("cancel", self.cancel))
@@ -216,16 +225,54 @@ class Handlers:
 
     def _allowed(self, update: Update) -> bool:
         chat = update.effective_chat
-        if chat is None or chat.id not in self._settings.allowed_chat_ids:
-            log.warning("ignored command from unauthorized chat %s",
-                        None if chat is None else chat.id)
+        if chat is None:
+            log.warning("ignored command from chat with no effective_chat")
             return False
-        return True
+        # static env list
+        if chat.id in self._settings.allowed_chat_ids:
+            return True
+        # dynamic subscription store
+        if self._subscriptions is not None \
+                and self._subscriptions.is_allowed(chat.id):
+            return True
+        log.warning("ignored command from unauthorized chat %s", chat.id)
+        return False
 
     @staticmethod
     async def _reply(update: Update, text: str) -> None:
         await update.effective_message.reply_text(
             text, parse_mode=ParseMode.HTML)
+
+    # ------------------------------------------------------------------
+    # subscribe / unsubscribe (NOT gated -- anyone can call)
+    # ------------------------------------------------------------------
+    async def subscribe(self, update: Update,
+                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if self._subscriptions is None:
+            await self._reply(update, "subscriptions are not wired up.")
+            return
+        chat = update.effective_chat
+        if chat is None:
+            return
+        if self._subscriptions.add(chat.id):
+            log.info("chat %d subscribed via /subscribe", chat.id)
+            await self._reply(update, fmt.subscribed(chat.id))
+        else:
+            await self._reply(update, fmt.already_subscribed(chat.id))
+
+    async def unsubscribe(self, update: Update,
+                          _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if self._subscriptions is None:
+            await self._reply(update, "subscriptions are not wired up.")
+            return
+        chat = update.effective_chat
+        if chat is None:
+            return
+        if self._subscriptions.remove(chat.id):
+            log.info("chat %d unsubscribed via /unsubscribe", chat.id)
+            await self._reply(update, fmt.unsubscribed(chat.id))
+        else:
+            await self._reply(update, fmt.not_subscribed(chat.id))
 
     # ------------------------------------------------------------------
     async def alert(self, update: Update,

@@ -464,6 +464,26 @@ def _trim(value: float) -> str:
 
 
 # --------------------------------------------------------------------------
+# subscription
+# --------------------------------------------------------------------------
+
+def subscribed(chat_id: int) -> str:
+    return "\u2705 chat %s subscribed." % esc(chat_id)
+
+
+def unsubscribed(chat_id: int) -> str:
+    return "\u2705 chat %s unsubscribed." % esc(chat_id)
+
+
+def already_subscribed(chat_id: int) -> str:
+    return "chat %s was already subscribed." % esc(chat_id)
+
+
+def not_subscribed(chat_id: int) -> str:
+    return "chat %s was not subscribed." % esc(chat_id)
+
+
+# --------------------------------------------------------------------------
 # setMyCommands payload — call once at startup
 # --------------------------------------------------------------------------
 
@@ -480,4 +500,6 @@ BOT_COMMANDS = [
     ("ccalert", "candle close alert"),
     ("list", "active alerts"),
     ("help", "full command list"),
+    ("subscribe", "allow this chat to use the bot"),
+    ("unsubscribe", "remove this chat"),
 ]

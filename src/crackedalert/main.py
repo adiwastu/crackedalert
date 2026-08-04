@@ -20,6 +20,7 @@ from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
 from .bot.handlers import Handlers
+from .bot.subscriptions import SubscriptionStore
 from .config import ConfigError, Settings, load_settings
 from .ctrader import client as ct
 from .ctrader.candles import CandleFeed
@@ -118,6 +119,10 @@ async def _run_bot(settings: Settings) -> None:
 
     candle_store = CandleAlertStore(settings.db_file)
 
+    # dynamic chat allow-list: seed static IDs, then /subscribe takes over
+    subscription_store = SubscriptionStore(settings.db_file)
+    subscription_store.seed(settings.allowed_chat_ids)
+
     app = (Application.builder()
            .token(settings.telegram_bot_token).build())
 
@@ -170,7 +175,8 @@ async def _run_bot(settings: Settings) -> None:
     trader = TradingService(clients, markets, settings)
     handlers = Handlers(settings, store, feed, settings.trade_symbol,
                         trader=trader, candle_store=candle_store,
-                        candle_feed=candle_feed)
+                        candle_feed=candle_feed,
+                        subscription_store=subscription_store)
     handlers.register(app)
 
     # P2: native command menu
@@ -216,6 +222,7 @@ async def _run_bot(settings: Settings) -> None:
         await cli.stop()
     store.close()
     candle_store.close()
+    subscription_store.close()
     log.info("shut down cleanly")
 
 
