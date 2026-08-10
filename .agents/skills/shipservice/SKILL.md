@@ -33,7 +33,7 @@ After implementing, run the **entire verification loop 3 complete times** (not o
 Each pass must include:
 - **Static code audit:** Re-read every file you changed. Confirm the change is correct, complete, and consistent with codebase conventions (no hardcoded secrets, existing logging patterns, standard library + listed deps only).
 - **Search sweep:** grep/file-search the relevant terms/strings to confirm no leftover references, dead code, or unintended side-effects. Confirm the version string in `pyproject.toml` and `src/crackedalert/__init__.py` match.
-- **Tests:** Run `python -m pytest` and confirm 0 failures.
+- **Tests:** Run `python -m unittest discover -s tests` and confirm 0 failures (the suite is unittest-based).
 - **Compile check:** Run `python -m compileall src` and confirm 0 errors (package builds).
 - **Logic trace (for bug fixes):** Walk through the affected flow and confirm it resolves correctly.
 
@@ -46,9 +46,10 @@ Run this loop **3 times**, documenting each pass. Only proceed after all 3 pass.
 
 ### 6. Give the VPS deploy command
 This is a backend-only service — **do not deploy locally**. End the report with the exact command the user runs on the VPS:
-- SSH to the VPS, `cd` into the repo, and run `sudo ./deploy_v2.sh`
+- The repo checkout on the VPS is at `~/crackedalert` (i.e. `/root/crackedalert`); `deploy_v2.sh` installs the app into `/opt/crackedalert`.
+- SSH to the VPS, `cd ~/crackedalert`, and run `sudo ./deploy_v2.sh`
 - `deploy_v2.sh` does: `git pull origin main`, installs into the venv, runs the connection smoke test (via `python -m crackedalert --smoke`), and restarts the `cracked-bot` systemd service.
-- If a bare `git pull` + manual restart is preferred: `git pull` then `sudo systemctl restart cracked-bot` (after installing).
+- If a bare `git pull` + manual restart is preferred: `cd ~/crackedalert && git pull`, then `sudo systemctl restart cracked-bot` (after installing).
 
 ### 7. Report
 Report: (1) old → new version bump, (2) research findings, (3) exact changes (files + rationale), (4) outcome of **each** verification pass, (5) test/compile results, (6) git commit hash + push confirmation, (7) the VPS deploy command, (8) residual observations.
