@@ -16,7 +16,8 @@ from telegram.constants import ParseMode
 from telegram.ext import Application
 
 from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
-                     CandleAlertStore)
+                     CandleAlertStore, CROSSING_UP, KIND_SL, KIND_TP,
+                     direction_for_side)
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
 from .bot.handlers import Handlers
@@ -129,7 +130,6 @@ async def _run_bot(settings: Settings) -> None:
     async def notify(chat_id: int, text: str) -> None:
         await app.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
 
-    engine = AlertEngine(store, notify, fmt.alert_fired)
     feed_account = settings.accounts[settings.price_feed_account]
 
     # one client + market-data cache per environment in use
@@ -141,6 +141,42 @@ async def _run_bot(settings: Settings) -> None:
         clients[env] = cli
         markets[env] = MarketData(cli)
 
+    trader = TradingService(clients, markets, settings)
+
+    async def broadcast(text: str) -> None:
+        """Send a message to every subscriber (auto trade alerts)."""
+        for cid in subscription_store.all_ids():
+            try:
+                await app.bot.send_message(cid, text,
+                                           parse_mode=ParseMode.HTML)
+            except Exception:
+                log.warning("broadcast to chat %s failed", cid)
+
+    async def on_entry_hit(alert) -> None:
+        """Confirm the position exists, then create TP/SL auto-alerts."""
+        side = "BUY" if alert.direction == CROSSING_UP else "SELL"
+        position = await trader.confirm_position(
+            alert.account, alert.symbol, side, alert.target, alert.trade_id)
+        if position is None:
+            raise RuntimeError("position not found")
+        tp = position.get("takeProfit")
+        sl = position.get("stopLoss")
+        if tp is None or sl is None:
+            raise RuntimeError("position has no TP/SL")
+        pos_id = str(position.get("positionId"))
+        store.create(
+            alert.chat_id, alert.symbol, float(tp),
+            direction_for_side(side, "tp"),
+            "auto TP hit for trade %s" % pos_id,
+            kind=KIND_TP, trade_id=pos_id, account=alert.account)
+        store.create(
+            alert.chat_id, alert.symbol, float(sl),
+            direction_for_side(side, "sl"),
+            "auto SL hit for trade %s" % pos_id,
+            kind=KIND_SL, trade_id=pos_id, account=alert.account)
+
+    engine = AlertEngine(store, notify, fmt.alert_fired,
+                         on_entry_hit=on_entry_hit, on_broadcast=broadcast)
     feed = FeedService(markets[feed_account.environment],
                        feed_account.ctid_account_id, engine)
     markets[feed_account.environment].add_tick_listener(feed.on_tick)
@@ -172,7 +208,6 @@ async def _run_bot(settings: Settings) -> None:
     for env, cli in clients.items():
         cli.set_on_connected(make_on_connected(env))
 
-    trader = TradingService(clients, markets, settings)
     handlers = Handlers(settings, store, feed, settings.trade_symbol,
                         trader=trader, candle_store=candle_store,
                         candle_feed=candle_feed,

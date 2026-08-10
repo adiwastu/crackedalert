@@ -3,6 +3,11 @@
 Replaces cracked_alerts.tsv and the 5-second polling checker. Alerts fire
 off the live tick stream (bid/ask midpoint, the closest analog of the old
 M1 close) and are deleted after firing, matching the bash behavior.
+
+Kind-aware: manual /alert (kind='manual') notifies the initiating chat.
+Trade auto-alerts (kind='entry'|'tp'|'sl') broadcast to every subscriber:
+an 'entry' alert, on hit, confirms the position actually exists, then
+creates 'tp' and 'sl' alerts from the position's real SL/TP.
 """
 
 import logging
@@ -18,6 +23,13 @@ CROSSING_UP = "CROSSING_UP"
 CROSSING_DOWN = "CROSSING_DOWN"
 ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
+# alert kinds
+KIND_MANUAL = "manual"
+KIND_ENTRY = "entry"
+KIND_TP = "tp"
+KIND_SL = "sl"
+AUTO_KINDS = (KIND_ENTRY, KIND_TP, KIND_SL)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS alerts (
     id         TEXT PRIMARY KEY,
@@ -26,11 +38,29 @@ CREATE TABLE IF NOT EXISTS alerts (
     target     REAL NOT NULL,
     direction  TEXT NOT NULL,
     message    TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'manual',
+    trade_id   TEXT NOT NULL DEFAULT '',
+    account    TEXT NOT NULL DEFAULT ''
 );
+"""
+
+# Created AFTER _migrate() so legacy DBs (no kind/trade_id yet) don't fail.
+SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts(symbol);
 CREATE INDEX IF NOT EXISTS idx_alerts_chat ON alerts(chat_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_trade ON alerts(trade_id, kind);
 """
+
+
+def direction_for_side(side: str, hit_type: str) -> str:
+    """Crossing direction for a price-level alert on a BUY/SELL side.
+
+    entry/tp: BUY → CROSSING_UP, SELL → CROSSING_DOWN.
+    sl:        BUY → CROSSING_DOWN, SELL → CROSSING_UP.
+    """
+    up = (hit_type == "sl") != (side == "BUY")
+    return CROSSING_UP if up else CROSSING_DOWN
 
 
 @dataclass(frozen=True)
@@ -41,13 +71,28 @@ class Alert:
     target: float
     direction: str
     message: str
+    kind: str = KIND_MANUAL
+    trade_id: str = ""
+    account: str = ""
 
 
 class AlertStore:
     def __init__(self, db_path: str):
         self._db = sqlite3.connect(db_path)
         self._db.executescript(SCHEMA)
+        self._migrate()
+        self._db.executescript(SCHEMA_INDEXES)
         self._db.commit()
+
+    def _migrate(self) -> None:
+        """Add newer columns to pre-existing DBs (idempotent)."""
+        cols = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
+        for col, ddl in (("kind", "TEXT NOT NULL DEFAULT 'manual'"),
+                         ("trade_id", "TEXT NOT NULL DEFAULT ''"),
+                         ("account", "TEXT NOT NULL DEFAULT ''")):
+            if col not in cols:
+                self._db.execute(
+                    "ALTER TABLE alerts ADD COLUMN %s %s" % (col, ddl))
 
     def close(self) -> None:
         self._db.close()
@@ -62,27 +107,32 @@ class AlertStore:
         raise RuntimeError("could not generate a unique alert id")
 
     def create(self, chat_id: int, symbol: str, target: float,
-               direction: str, message: str) -> Alert:
+               direction: str, message: str,
+               kind: str = KIND_MANUAL, trade_id: str = "",
+               account: str = "") -> Alert:
         alert = Alert(self._gen_id(), chat_id, symbol.upper(), target,
-                      direction, message)
+                      direction, message, kind, trade_id, account)
         self._db.execute(
-            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (alert.id, alert.chat_id, alert.symbol, alert.target,
-             alert.direction, alert.message, int(time.time())))
+             alert.direction, alert.message, int(time.time()),
+             alert.kind, alert.trade_id, alert.account))
         self._db.commit()
         return alert
 
     def for_chat(self, chat_id: int) -> List[Alert]:
         rows = self._db.execute(
-            "SELECT id, chat_id, symbol, target, direction, message "
-            "FROM alerts WHERE chat_id = ? ORDER BY created_at",
+            "SELECT id, chat_id, symbol, target, direction, message, "
+            "kind, trade_id, account FROM alerts WHERE chat_id = ? "
+            "ORDER BY created_at",
             (chat_id,)).fetchall()
         return [Alert(*row) for row in rows]
 
     def for_symbol(self, symbol: str) -> List[Alert]:
         rows = self._db.execute(
-            "SELECT id, chat_id, symbol, target, direction, message "
-            "FROM alerts WHERE symbol = ?", (symbol.upper(),)).fetchall()
+            "SELECT id, chat_id, symbol, target, direction, message, "
+            "kind, trade_id, account FROM alerts WHERE symbol = ?",
+            (symbol.upper(),)).fetchall()
         return [Alert(*row) for row in rows]
 
     def active_symbols(self) -> Set[str]:
@@ -90,12 +140,21 @@ class AlertStore:
         return {row[0] for row in rows}
 
     def cancel(self, alert_id: str, chat_id: int) -> bool:
-        """Delete only if the alert belongs to this chat (bash parity)."""
+        """Delete only a MANUAL alert owned by this chat (bash parity).
+        Auto trade alerts are system-managed and not user-cancellable."""
         cur = self._db.execute(
-            "DELETE FROM alerts WHERE id = ? AND chat_id = ?",
-            (alert_id.upper(), chat_id))
+            "DELETE FROM alerts WHERE id = ? AND chat_id = ? AND kind = ?",
+            (alert_id.upper(), chat_id, KIND_MANUAL))
         self._db.commit()
         return cur.rowcount > 0
+
+    def cancel_auto(self, trade_id: str) -> int:
+        """Delete auto alerts (entry/tp/sl) tied to a trade_id. Returns count."""
+        cur = self._db.execute(
+            "DELETE FROM alerts WHERE trade_id = ? AND kind != ?",
+            (trade_id, KIND_MANUAL))
+        self._db.commit()
+        return cur.rowcount
 
     def delete(self, alert_id: str) -> None:
         self._db.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
@@ -120,7 +179,9 @@ class AlertStore:
                     continue
                 try:
                     self._db.execute(
-                        "INSERT OR IGNORE INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO alerts "
+                        "(id, chat_id, symbol, target, direction, message, "
+                        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (alert_id.upper(), int(chat_id), symbol.upper(),
                          float(target), direction, message, int(time.time())))
                     imported += 1
@@ -134,16 +195,27 @@ class AlertStore:
 
 Notifier = Callable[[int, str], Awaitable[None]]  # (chat_id, text)
 Formatter = Callable[[Alert], str]
+OnEntryHit = Callable[[Alert], Awaitable[None]]   # raises if not confirmed
+Broadcaster = Callable[[str], Awaitable[None]]    # (text)
 
 
 class AlertEngine:
-    """Consumes ticks, fires crossed alerts, deletes them."""
+    """Consumes ticks, fires crossed alerts, deletes them.
+
+    Manual alerts notify the owning chat. Entry/tp/sl auto alerts broadcast
+    to every subscriber; an entry alert, on hit, is routed through
+    `on_entry_hit` which confirms the position and creates the tp/sl alerts.
+    """
 
     def __init__(self, store: AlertStore, notify: Notifier,
-                 format_fired: Formatter):
+                 format_fired: Formatter,
+                 on_entry_hit: Optional[OnEntryHit] = None,
+                 on_broadcast: Optional[Broadcaster] = None):
         self._store = store
         self._notify = notify
         self._format = format_fired
+        self._on_entry_hit = on_entry_hit
+        self._on_broadcast = on_broadcast
 
     async def on_tick(self, symbol: str, bid: float, ask: float) -> None:
         mid = (bid + ask) / 2.0
@@ -155,13 +227,47 @@ class AlertEngine:
                 continue
             log.info("alert %s fired: %s crossed %s (mid %.5f)",
                      alert.id, alert.symbol, alert.target, mid)
-            try:
-                await self._notify(alert.chat_id, self._format(alert))
-            except Exception:
-                log.exception("failed to notify chat %d for alert %s -- "
-                              "keeping alert", alert.chat_id, alert.id)
-                continue
+            if alert.kind == KIND_MANUAL:
+                await self._fire_manual(alert)
+            elif alert.kind == KIND_ENTRY:
+                await self._fire_entry(alert)
+            else:  # KIND_TP / KIND_SL
+                await self._fire_auto(alert)
+
+    async def _fire_manual(self, alert: Alert) -> None:
+        try:
+            await self._notify(alert.chat_id, self._format(alert))
+        except Exception:
+            log.exception("failed to notify chat %d for alert %s -- "
+                          "keeping alert", alert.chat_id, alert.id)
+            return
+        self._store.delete(alert.id)
+
+    async def _fire_entry(self, alert: Alert) -> None:
+        if self._on_entry_hit is None:
             self._store.delete(alert.id)
+            return
+        try:
+            await self._on_entry_hit(alert)   # confirm position + create tp/sl
+        except Exception:
+            log.exception("entry alert %s: position not confirmed yet -- "
+                          "keeping alert", alert.id)
+            return
+        await self._broadcast(alert)
+        self._store.delete(alert.id)
+
+    async def _fire_auto(self, alert: Alert) -> None:
+        await self._broadcast(alert)
+        self._store.delete(alert.id)
+
+    async def _broadcast(self, alert: Alert) -> None:
+        if self._on_broadcast is None:
+            return
+        try:
+            await self._on_broadcast(self._format(alert))
+        except Exception:
+            log.exception("broadcast failed for alert %s -- dropping "
+                          "notification", alert.id)
 
 
 def infer_direction(live_price: float, target: float) -> str:

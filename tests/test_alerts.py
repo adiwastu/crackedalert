@@ -213,5 +213,170 @@ class CandleEngineTests(unittest.TestCase):
         self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
 
 
+class DirectionForSideTests(unittest.TestCase):
+    def test_entry_and_tp(self):
+        self.assertEqual(alerts.direction_for_side("BUY", "entry"),
+                         alerts.CROSSING_UP)
+        self.assertEqual(alerts.direction_for_side("SELL", "entry"),
+                         alerts.CROSSING_DOWN)
+        self.assertEqual(alerts.direction_for_side("BUY", "tp"),
+                         alerts.CROSSING_UP)
+        self.assertEqual(alerts.direction_for_side("SELL", "tp"),
+                         alerts.CROSSING_DOWN)
+
+    def test_sl_opposite(self):
+        self.assertEqual(alerts.direction_for_side("BUY", "sl"),
+                         alerts.CROSSING_DOWN)
+        self.assertEqual(alerts.direction_for_side("SELL", "sl"),
+                         alerts.CROSSING_UP)
+
+
+class AutoAlertEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.AlertStore(":memory:")
+        self.broadcast = []
+        self.entry_hits = []
+
+        async def notify(chat_id, text):
+            raise AssertionError("manual notify should not be called")
+
+        async def broadcast(text):
+            self.broadcast.append(text)
+
+        async def on_entry_hit(alert):
+            self.entry_hits.append(alert)
+            self.store.create(
+                alert.chat_id, alert.symbol, 2480.0,
+                alerts.direction_for_side("BUY", "tp"),
+                "TP", kind=alerts.KIND_TP, trade_id="9",
+                account=alert.account)
+            self.store.create(
+                alert.chat_id, alert.symbol, 2440.0,
+                alerts.direction_for_side("BUY", "sl"),
+                "SL", kind=alerts.KIND_SL, trade_id="9",
+                account=alert.account)
+
+        self.engine = alerts.AlertEngine(
+            self.store, notify, fmt.alert_fired,
+            on_entry_hit=on_entry_hit, on_broadcast=broadcast)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_entry_fires_creates_tp_sl_and_broadcasts(self):
+        self.store.create(111, "XAUUSD", 2450.0,
+                          alerts.CROSSING_UP, "entry",
+                          kind=alerts.KIND_ENTRY, trade_id="9",
+                          account="live")
+        run(self.engine.on_tick("XAUUSD", 2450.0, 2450.4))   # mid 2450.2
+        self.assertEqual(len(self.entry_hits), 1)
+        self.assertEqual(len(self.broadcast), 1)              # entry hit broadcast
+        rows = self.store.for_chat(111)
+        kinds = {r.kind for r in rows}
+        self.assertEqual(kinds, {alerts.KIND_TP, alerts.KIND_SL})
+
+    def test_entry_not_confirmed_keeps_alert(self):
+        store = alerts.AlertStore(":memory:")
+        sent = []
+
+        async def notify(chat_id, text):
+            pass
+
+        async def broadcast(text):
+            sent.append(text)
+
+        async def on_entry_hit(alert):
+            raise RuntimeError("position not found")
+
+        engine = alerts.AlertEngine(
+            store, notify, fmt.alert_fired,
+            on_entry_hit=on_entry_hit, on_broadcast=broadcast)
+        store.create(111, "XAUUSD", 2450.0, alerts.CROSSING_UP, "e",
+                     kind=alerts.KIND_ENTRY, trade_id="9")
+        run(engine.on_tick("XAUUSD", 2450.0, 2450.4))
+        self.assertEqual(sent, [])                            # no broadcast
+        self.assertEqual(len(store.for_chat(111)), 1)         # kept
+        store.close()
+
+    def test_tp_fires_broadcasts_and_deletes(self):
+        self.store.create(111, "XAUUSD", 2480.0,
+                          alerts.CROSSING_UP, "TP",
+                          kind=alerts.KIND_TP, trade_id="9")
+        run(self.engine.on_tick("XAUUSD", 2480.0, 2480.4))
+        self.assertEqual(len(self.broadcast), 1)
+        self.assertEqual(self.store.for_chat(111), [])        # deleted
+
+    def test_manual_still_notifies_owning_chat(self):
+        store = alerts.AlertStore(":memory:")
+        sent = []
+
+        async def notify(chat_id, text):
+            sent.append((chat_id, text))
+
+        engine = alerts.AlertEngine(store, notify, fmt.alert_fired)
+        store.create(111, "XAUUSD", 2450.0, alerts.CROSSING_UP, "note")
+        run(engine.on_tick("XAUUSD", 2450.0, 2450.4))
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][0], 111)
+        store.close()
+
+
+class AutoAlertStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.AlertStore(":memory:")
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_cancel_only_manual(self):
+        self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP, "m")
+        auto = self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP,
+                                 "e", kind=alerts.KIND_ENTRY, trade_id="9")
+        # auto alerts are not user-cancellable via /cancel
+        self.assertFalse(self.store.cancel(auto.id, 1))
+        self.assertEqual(len(self.store.for_chat(1)), 2)
+        # manual alerts are still cancellable
+        m = self.store.for_chat(1)[0]
+        self.assertEqual(m.kind, alerts.KIND_MANUAL)
+        self.assertTrue(self.store.cancel(m.id, 1))
+        self.assertEqual(len(self.store.for_chat(1)), 1)
+        # cancel_auto removes the remaining auto alert
+        self.assertTrue(self.store.cancel_auto("9"))
+        self.assertEqual(self.store.for_chat(1), [])
+
+    def test_cancel_auto_by_trade_id(self):
+        self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP, "m")
+        self.store.create(1, "XAUUSD", 2480.0, alerts.CROSSING_UP, "tp",
+                          kind=alerts.KIND_TP, trade_id="9")
+        self.store.create(1, "XAUUSD", 2440.0, alerts.CROSSING_DOWN, "sl",
+                          kind=alerts.KIND_SL, trade_id="9")
+        self.assertEqual(self.store.cancel_auto("9"), 2)
+        self.assertEqual(len(self.store.for_chat(1)), 1)
+
+    def test_migration_adds_columns(self):
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "alerts.db")
+            conn = sqlite3.connect(path)
+            # simulate an old table without the new columns
+            conn.execute(
+                "CREATE TABLE alerts (id TEXT PRIMARY KEY, chat_id INTEGER, "
+                "symbol TEXT, target REAL, direction TEXT, message TEXT, "
+                "created_at INTEGER)")
+            conn.execute(
+                "INSERT INTO alerts VALUES ('AAAA', 1, 'XAUUSD', 2450.0, "
+                "'CROSSING_UP', 'note', 0)")
+            conn.commit()
+            conn.close()
+            s = alerts.AlertStore(path)
+            cols = {r[1] for r in s._db.execute("PRAGMA table_info(alerts)")}
+            self.assertIn("kind", cols)
+            self.assertIn("trade_id", cols)
+            self.assertIn("account", cols)
+            self.assertEqual(len(s.for_chat(1)), 1)   # legacy row readable
+            s.close()
+
+
 if __name__ == "__main__":
     unittest.main()

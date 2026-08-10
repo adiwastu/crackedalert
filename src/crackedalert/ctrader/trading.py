@@ -182,6 +182,47 @@ class TradingService:
         return plan, symbol, result, volume_to_lots(volume, symbol)
 
     # ------------------------------------------------------------------
+    # entry confirmation (for trade auto-alerts)
+    # ------------------------------------------------------------------
+    async def confirm_position(self, account_code: str, symbol_name: str,
+                               side: str, entry_target: float,
+                               trade_id: str):
+        """Return the open position matching symbol/side (+ id or entry
+        proximity), or None. Used to confirm an 'entry' auto-alert before
+        creating TP/SL alerts. Raises TradeRejected for account/link errors."""
+        account = self._settings.accounts.get(account_code)
+        if account is None:
+            raise TradeRejected(
+                "error: account '%s' not found." % account_code)
+        cli = self._clients[account.environment]
+        market: MarketData = self._markets[account.environment]
+        if not cli.connected:
+            raise TradeRejected(
+                "error: cTrader %s link is down, try again shortly."
+                % account.environment)
+
+        info = await market.ensure_symbol(account.ctid_account_id,
+                                          symbol_name)
+        symbol_id = info.symbol_id
+        _, payload = await cli.request(ct.PT_RECONCILE_REQ, {
+            "ctidTraderAccountId": account.ctid_account_id,
+        })
+        tolerance = max(0.0003 * entry_target, 0.05)
+        for item in payload.get("position", []):
+            trade = item.get("tradeData", {}) or {}
+            if int(trade.get("symbolId", 0)) != symbol_id:
+                continue
+            if trade.get("tradeSide") != side:
+                continue
+            pos_id = item.get("positionId")
+            if str(pos_id) == str(trade_id):
+                return item
+            entry = item.get("price")
+            if entry is not None and abs(entry - entry_target) <= tolerance:
+                return item
+        return None
+
+    # ------------------------------------------------------------------
     # account balance (for /help)
     # ------------------------------------------------------------------
     async def balance(self, shortcode: str) -> float:

@@ -395,6 +395,10 @@ class Handlers:
             await self._reply(update, fmt.positions_error(
                 account, "internal error"))
             return
+        # cancel auto TP/SL alerts for every closed position
+        for r in results:
+            if r.get("ok") and r.get("id") is not None:
+                self._store.cancel_auto(str(r["id"]))
         await self._reply(update, fmt.close_all_result(account, results))
 
     async def close_position(self, update: Update,
@@ -425,6 +429,8 @@ class Handlers:
             await self._reply(update, fmt.close_error(
                 account, position_id, "internal error"))
             return
+        # cancel auto TP/SL alerts tied to the closed position
+        self._store.cancel_auto(str(position_id))
         await self._reply(update, fmt.close_success(account, position_id))
 
     async def cancel_order(self, update: Update,
@@ -455,6 +461,8 @@ class Handlers:
             await self._reply(update, fmt.cancel_order_error(
                 account, order_id, "internal error"))
             return
+        # cancel the auto entry alert tied to the cancelled pending order
+        self._store.cancel_auto(str(order_id))
         await self._reply(update, fmt.cancel_order_success(account, order_id))
 
     async def breakeven(self, update: Update,
@@ -588,3 +596,23 @@ class Handlers:
             sl=plan.sl, tp=plan.tp, rr=args.rr,
             widen_label=plan.widen_label, digits=symbol.digits,
             dollar_risk=args.risk_usd is not None))
+
+        # Auto trade alerts: entry alert for this order; on entry hit the
+        # engine confirms the position and creates TP/SL alerts.
+        self._create_entry_alert(update, plan, symbol.name, result,
+                                 args.account)
+
+    def _create_entry_alert(self, update: Update, plan, symbol_name: str,
+                            result, account: str) -> None:
+        """Create an 'entry' auto-alert for a just-placed order. The engine
+        fires it when the entry is hit, confirms the position, then creates
+        TP/SL alerts broadcast to all subscribers."""
+        trade_id = str(result.order_id) if result.order_id is not None else ""
+        direction = alerts_mod.direction_for_side(plan.direction, "entry")
+        alert = self._store.create(
+            update.effective_chat.id, symbol_name, plan.entry_ref, direction,
+            "auto entry %s %s" % (plan.direction, symbol_name),
+            kind=alerts_mod.KIND_ENTRY, trade_id=trade_id,
+            account=account)
+        log.info("auto entry alert %s created: %s %s trade=%s",
+                 alert.id, alert.symbol, alert.target, trade_id)
