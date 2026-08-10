@@ -138,23 +138,17 @@ class CandleFeed:
         key = (symbol, timeframe)
         prev_ts = self._last_ts.get(key)
         if prev_ts is not None and latest_ts > prev_ts:
-            # A newer bar appeared => the bar that was at prev_ts just closed.
-            closed = self._find_bar(bars, prev_ts)
-            if closed is not None:
-                close = self._bar_close(closed)
-                self._last_close[key] = close
-                log.info("candle closed %s %s ts=%d close=%.5f",
-                         symbol, timeframe, prev_ts, close)
-                await self._engine.on_closed_bar(
-                    symbol, timeframe, close, prev_ts)
+            # A newer bar appeared => the newest bar (bars[-1]) just closed.
+            # GetTrendbars returns only completed bars (no forming candle),
+            # so the just-closed bar is the new latest, not the one at
+            # prev_ts (which is already a candle older).
+            close = self._bar_close(bars[-1])
+            self._last_close[key] = close
+            log.info("candle closed %s %s ts=%d close=%.5f",
+                     symbol, timeframe, latest_ts, close)
+            await self._engine.on_closed_bar(
+                symbol, timeframe, close, latest_ts)
         self._last_ts[key] = latest_ts
-
-    @staticmethod
-    def _find_bar(bars: list, ts: int) -> Optional[dict]:
-        for b in bars:
-            if int(b.get("utcTimestampInMinutes", 0) or 0) == ts:
-                return b
-        return None
 
     @staticmethod
     def _bar_close(bar: dict) -> float:
