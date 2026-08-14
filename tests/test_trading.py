@@ -228,7 +228,7 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["orderType"], "LIMIT")
         self.assertEqual(sent["limitPrice"], 2400.2)   # entry + 0.2 spread
         self.assertEqual(sent["stopLoss"], 2395.0)
-        self.assertEqual(sent["takeProfit"], 2415.0)   # math on raw entry
+        self.assertEqual(sent["takeProfit"], 2415.8)   # 2400.2 + 5.2*3
 
     def test_dollar_risk_executes_exact_amount(self):
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,

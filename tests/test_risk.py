@@ -53,10 +53,20 @@ class PendingOrders(unittest.TestCase):
         self.assertEqual(p.direction, risk.BUY)
         self.assertEqual(p.order_kind, risk.LIMIT)
         self.assertAlmostEqual(p.placement_price, 2400.2)   # entry + spread
-        self.assertAlmostEqual(p.entry_ref, 2400.0)          # math on raw
-        self.assertAlmostEqual(p.dist, 5.0)
-        self.assertAlmostEqual(p.tp, 2415.0)                 # 2400 + 5*3
-        self.assertAlmostEqual(p.lots, 0.2)                  # 100/(5*100)
+        self.assertAlmostEqual(p.entry_ref, 2400.0)          # raw entry kept
+        self.assertAlmostEqual(p.dist, 5.2)                 # fill 2400.2 - sl
+        self.assertAlmostEqual(p.tp, 2415.8)                # 2400.2 + 5.2*3
+        self.assertAlmostEqual(p.lots, 0.19)                # 100/(5.2*100)
+
+    def test_pending_buy_tp_based_on_placement(self):
+        # RR applies to the real distance from the actual fill (placement)
+        # to SL, not the raw entry. spread 0.2 -> fill 2400.2, real risk 5.2.
+        p = risk.plan_pending(self.BID, self.ASK, entry=2400.0, sl=2395.0,
+                              widen=False, rr=3, risk_pct=1, balance=10000)
+        placement = p.placement_price
+        self.assertAlmostEqual(placement, 2400.2)
+        self.assertAlmostEqual(p.dist, placement - p.sl)
+        self.assertAlmostEqual(p.tp, placement + (placement - p.sl) * 3)
 
     def test_buy_above_market_is_stop(self):
         p = risk.plan_pending(self.BID, self.ASK, entry=2500.0, sl=2490.0,
@@ -71,7 +81,9 @@ class PendingOrders(unittest.TestCase):
         self.assertEqual(p.direction, risk.SELL)
         self.assertEqual(p.order_kind, risk.LIMIT)
         self.assertAlmostEqual(p.placement_price, 2499.8)   # entry - spread
-        self.assertAlmostEqual(p.tp, 2490.0)                # 2500 - 10*1
+        self.assertAlmostEqual(p.dist, 10.2)                # sl - fill 2499.8
+        self.assertAlmostEqual(p.tp, 2489.6)                # 2499.8 - 10.2*1
+        self.assertAlmostEqual(p.lots, 0.09)                # 100/(10.2*100)
 
     def test_sell_below_market_is_stop(self):
         p = risk.plan_pending(self.BID, self.ASK, entry=2400.0, sl=2410.0,
@@ -91,9 +103,11 @@ class LotEdgeCases(unittest.TestCase):
         self.assertEqual(p.lots, 0.0)
 
     def test_zero_distance_yields_zero_lots(self):
-        # SL == entry ref -> dist 0 -> lots 0 (caller must reject)
-        p = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2400.0,
-                              widen=False, rr=1, risk_pct=1, balance=10000)
+        # SL == fill price -> dist 0 -> lots 0 (caller must reject).
+        # Zero spread: SL == entry_ref == fill -> dist 0 -> lots 0.
+        p = risk.plan_market(bid=2450.0, ask=2450.0, sl=2450.0,
+                             widen=False, rr=1, risk_pct=1, balance=10000)
+        self.assertEqual(p.dist, 0.0)
         self.assertEqual(p.lots, 0.0)
 
     def test_floor_never_exceeds_risk(self):
@@ -114,11 +128,12 @@ class DollarRisk(unittest.TestCase):
         self.assertAlmostEqual(p.lots, 0.05)   # 50/(10*100), dist=10
 
     def test_dollar_override_pending(self):
+        # real distance is placement 2400.2 - sl 2395 = 5.2
         p = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2395.0,
                               widen=False, rr=3, risk_pct=99, balance=1,
                               risk_usd=100.0)
         self.assertAlmostEqual(p.risk_usd, 100.0)
-        self.assertAlmostEqual(p.lots, 0.2)    # 100/(5*100)
+        self.assertAlmostEqual(p.lots, 0.19)    # 100/(5.2*100)
 
     def test_dollar_override_zero_balance_still_works(self):
         # balance is irrelevant in dollar mode

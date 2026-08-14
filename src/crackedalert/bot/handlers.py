@@ -609,8 +609,9 @@ class Handlers:
         TP/SL alerts broadcast to all subscribers."""
         trade_id = str(result.order_id) if result.order_id is not None else ""
         direction = alerts_mod.direction_for_side(plan.direction, "entry")
+        target = plan.placement_price if plan.placement_price is not None else plan.entry_ref
         alert = self._store.create(
-            update.effective_chat.id, symbol_name, plan.entry_ref, direction,
+            update.effective_chat.id, symbol_name, target, direction,
             "auto entry %s %s" % (plan.direction, symbol_name),
             kind=alerts_mod.KIND_ENTRY, trade_id=trade_id,
             account=account)

@@ -49,15 +49,21 @@ def _build(direction: str, order_kind: str, entry_ref: float,
            placement_price: Optional[float], sl: float, widen: bool,
            rr: float, risk_pct: float, balance: float, spread: float,
            usd_per_point_per_lot: float, min_lots: float,
-           lot_step: float, risk_usd_override: Optional[float] = None
+           lot_step: float, risk_usd_override: Optional[float] = None,
+           basis: Optional[float] = None
            ) -> TradePlan:
     widen_label = ""
     if widen:
         sl = sl - WIDEN_AMOUNT if direction == BUY else sl + WIDEN_AMOUNT
         widen_label = WIDEN_LABEL
 
-    dist = abs(entry_ref - sl)
-    tp = entry_ref + dist * rr if direction == BUY else entry_ref - dist * rr
+    # Pending orders fill at the spread-adjusted placement price, so their
+    # SL/TP/dist/lots are computed off that actual fill (basis). Market
+    # orders: basis == entry_ref (the fill price).
+    if basis is None:
+        basis = entry_ref
+    dist = abs(basis - sl)
+    tp = basis + dist * rr if direction == BUY else basis - dist * rr
 
     if risk_usd_override is not None:
         risk_usd = risk_usd_override
@@ -100,9 +106,10 @@ def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
                  min_lots: float = 0.01,
                  lot_step: float = 0.01,
                  risk_usd: Optional[float] = None) -> TradePlan:
-    """Pending order: math on the user's raw entry; placement price is
-    spread-offset (BUY above, SELL below); LIMIT/STOP inferred from where
-    the placement price sits relative to the current book.
+    """Pending order: placement price is spread-offset (BUY above, SELL
+    below); LIMIT/STOP inferred from where the placement price sits relative
+    to the current book. SL/TP/dist/lots are computed off the placement
+    price (the actual fill), not the raw entry.
 
     risk_usd overrides the percentage-based risk (dollar mode): when set,
     risk_pct is ignored and the exact dollar amount is used.
@@ -120,4 +127,4 @@ def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
     return _build(direction, order_kind, entry, placement, sl, widen, rr,
                   risk_pct, balance, spread,
                   usd_per_point_per_lot, min_lots, lot_step,
-                  risk_usd_override=risk_usd)
+                  risk_usd_override=risk_usd, basis=placement)
