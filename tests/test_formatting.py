@@ -322,6 +322,63 @@ class CandleAlertTests(unittest.TestCase):
         self.assertIn("/cccancel", fmt.candle_cancel_usage())
         self.assertIn("/ccalert", fmt.candle_alert_usage())
 
+    def test_candle_alert_list_tags_guards(self):
+        alerts_list = [
+            CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
+                        CANDLE_ABOVE, "n1"),
+            CandleAlert("CD34", 111, "XAUUSD", "H1", 4080.0,
+                        CANDLE_BELOW, "guard",
+                        action="close", position_id=42, account="demo"),
+        ]
+        text = fmt.candle_alert_list(alerts_list)
+        self.assertIn("[guard #42]", text)
+        self.assertNotIn("[guard", text.splitlines()[1])  # first line (n1) no tag
+
+
+class CCGuardFormattingTests(unittest.TestCase):
+    def test_cc_guard_set(self):
+        a = CandleAlert("AB12", 111, "XAUUSD", "M15", 4080.0,
+                        CANDLE_BELOW, "guard",
+                        action="close", position_id=42, account="demo")
+        text = fmt.cc_guard_set(a)
+        self.assertIn("AB12", text)
+        self.assertIn("XAUUSD M15", text)
+        self.assertIn("below", text)
+        self.assertIn("4080", text)
+        self.assertIn("position 42", text)
+
+    def test_cc_guard_set_above(self):
+        a = CandleAlert("CD34", 111, "XAUUSD", "H1", 4100.0,
+                        CANDLE_ABOVE, "guard",
+                        action="close", position_id=7, account="live")
+        text = fmt.cc_guard_set(a)
+        self.assertIn("above", text)
+        self.assertIn("position 7", text)
+
+    def test_cc_guard_pending(self):
+        text = fmt.cc_guard_pending("M15", 4080.0)
+        self.assertIn("M15", text)
+        self.assertIn("4080", text)
+
+    def test_cc_guard_fired(self):
+        a = CandleAlert("AB12", 111, "XAUUSD", "M15", 4080.0,
+                        CANDLE_BELOW, "guard",
+                        action="close", position_id=42, account="demo")
+        text = fmt.cc_guard_fired(a)
+        self.assertIn("AB12", text)
+        self.assertIn("XAUUSD M15", text)
+        self.assertIn("below", text)
+        self.assertIn("position 42", text)
+
+    def test_cc_guard_position_gone(self):
+        a = CandleAlert("AB12", 111, "XAUUSD", "M15", 4080.0,
+                        CANDLE_BELOW, "guard",
+                        action="close", position_id=42, account="demo")
+        text = fmt.cc_guard_position_gone(a)
+        self.assertIn("AB12", text)
+        self.assertIn("position 42", text)
+        self.assertIn("already closed", text)
+
 
 class TrivialFormattersTests(unittest.TestCase):
     def test_simple_string_formatters(self):

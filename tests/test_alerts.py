@@ -374,7 +374,220 @@ class AutoAlertStoreTests(unittest.TestCase):
             self.assertIn("kind", cols)
             self.assertIn("trade_id", cols)
             self.assertIn("account", cols)
+            self.assertIn("cc_timeframe", cols)
+            self.assertIn("cc_price", cols)
             self.assertEqual(len(s.for_chat(1)), 1)   # legacy row readable
+            s.close()
+
+
+class CandleGuardStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.CandleAlertStore(":memory:")
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_create_guard_stores_fields(self):
+        a = self.store.create(111, "XAUUSD", "M15", 4080.0,
+                              alerts.CANDLE_BELOW, "guard",
+                              action="close", position_id=42,
+                              account="demo")
+        rows = self.store.for_chat(111)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].action, "close")
+        self.assertEqual(rows[0].position_id, 42)
+        self.assertEqual(rows[0].account, "demo")
+
+    def test_guard_in_for_key(self):
+        self.store.create(111, "XAUUSD", "M15", 4080.0,
+                          alerts.CANDLE_BELOW, "guard",
+                          action="close", position_id=42,
+                          account="demo")
+        rows = self.store.for_key("XAUUSD", "M15")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].action, "close")
+        self.assertEqual(rows[0].position_id, 42)
+
+    def test_cancel_for_position(self):
+        self.store.create(111, "XAUUSD", "M15", 4080.0,
+                          alerts.CANDLE_BELOW, "guard",
+                          action="close", position_id=42,
+                          account="demo")
+        self.store.create(111, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "notify alert")
+        n = self.store.cancel_for_position(42)
+        self.assertEqual(n, 1)
+        rows = self.store.for_chat(111)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].action, "notify")
+
+    def test_cancel_for_position_wrong_id(self):
+        self.store.create(111, "XAUUSD", "M15", 4080.0,
+                          alerts.CANDLE_BELOW, "guard",
+                          action="close", position_id=42,
+                          account="demo")
+        n = self.store.cancel_for_position(99)
+        self.assertEqual(n, 0)
+
+    def test_notify_defaults(self):
+        a = self.store.create(111, "XAUUSD", "M15", 2450.0,
+                              alerts.CANDLE_ABOVE, "note")
+        self.assertEqual(a.action, "notify")
+        self.assertEqual(a.position_id, 0)
+        self.assertEqual(a.account, "")
+
+    def test_candle_migration_adds_columns(self):
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "candles.db")
+            conn = sqlite3.connect(path)
+            conn.execute(
+                "CREATE TABLE candle_alerts (id TEXT PRIMARY KEY, "
+                "chat_id INTEGER, symbol TEXT, timeframe TEXT, "
+                "target REAL, direction TEXT, message TEXT, "
+                "created_at INTEGER)")
+            conn.execute(
+                "INSERT INTO candle_alerts VALUES ('AAAA', 1, 'XAUUSD', "
+                "'M15', 2450.0, 'ABOVE', 'note', 0)")
+            conn.commit()
+            conn.close()
+            s = alerts.CandleAlertStore(path)
+            cols = {r[1] for r in s._db.execute(
+                "PRAGMA table_info(candle_alerts)")}
+            self.assertIn("action", cols)
+            self.assertIn("position_id", cols)
+            self.assertIn("account", cols)
+            rows = s.for_chat(1)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].action, "notify")
+            self.assertEqual(rows[0].position_id, 0)
+            self.assertEqual(rows[0].account, "")
+            s.close()
+
+
+class CandleGuardEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.CandleAlertStore(":memory:")
+        self.sent = []
+        self.close_hits = []
+
+        async def notify(chat_id, text):
+            self.sent.append((chat_id, text))
+
+        async def on_close_hit(alert):
+            self.close_hits.append(alert)
+
+        self.engine = alerts.CandleAlertEngine(
+            self.store, notify, fmt.candle_alert_fired,
+            on_close_hit=on_close_hit)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_guard_calls_on_close_hit_not_notify(self):
+        self.store.create(111, "XAUUSD", "M15", 4080.0,
+                          alerts.CANDLE_BELOW, "guard",
+                          action="close", position_id=42,
+                          account="demo")
+        run(self.engine.on_closed_bar("XAUUSD", "M15", 4079.0, 100))
+        self.assertEqual(len(self.close_hits), 1)
+        self.assertEqual(self.close_hits[0].position_id, 42)
+        self.assertEqual(self.sent, [])   # no notify
+        self.assertEqual(self.store.for_chat(111), [])   # deleted
+
+    def test_guard_kept_on_transient_error(self):
+        self.store.create(111, "XAUUSD", "M15", 4080.0,
+                          alerts.CANDLE_BELOW, "guard",
+                          action="close", position_id=42,
+                          account="demo")
+
+        async def noop(chat_id, text):
+            pass
+
+        async def broken_close(alert):
+            raise RuntimeError("link down")
+
+        engine = alerts.CandleAlertEngine(
+            self.store, noop, fmt.candle_alert_fired,
+            on_close_hit=broken_close)
+        run(engine.on_closed_bar("XAUUSD", "M15", 4079.0, 100))
+        self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
+
+    def test_guard_not_crossed_stays(self):
+        self.store.create(111, "XAUUSD", "M15", 4080.0,
+                          alerts.CANDLE_BELOW, "guard",
+                          action="close", position_id=42,
+                          account="demo")
+        run(self.engine.on_closed_bar("XAUUSD", "M15", 4081.0, 100))
+        self.assertEqual(self.close_hits, [])
+        self.assertEqual(len(self.store.for_chat(111)), 1)
+
+    def test_notify_unaffected_by_guard(self):
+        self.store.create(111, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "note")
+        run(self.engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        self.assertEqual(self.close_hits, [])
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.store.for_chat(111), [])
+
+    def test_no_on_close_hook_falls_through_to_notify(self):
+        self.store.create(111, "XAUUSD", "M15", 4080.0,
+                          alerts.CANDLE_BELOW, "guard",
+                          action="close", position_id=42,
+                          account="demo")
+
+        async def notify(chat_id, text):
+            self.sent.append((chat_id, text))
+
+        engine = alerts.CandleAlertEngine(
+            self.store, notify, fmt.candle_alert_fired)
+        run(engine.on_closed_bar("XAUUSD", "M15", 4079.0, 100))
+        self.assertEqual(len(self.sent), 1)   # fell through to notify
+        self.assertEqual(self.store.for_chat(111), [])
+
+
+class AlertStoreGuardFieldTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.AlertStore(":memory:")
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_entry_alert_with_cc_fields(self):
+        a = self.store.create(111, "XAUUSD", 2450.0,
+                              alerts.CROSSING_UP, "entry",
+                              kind=alerts.KIND_ENTRY, trade_id="9",
+                              account="demo",
+                              cc_timeframe="M15", cc_price=4080.0)
+        rows = self.store.for_symbol("XAUUSD")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].cc_timeframe, "M15")
+        self.assertEqual(rows[0].cc_price, 4080.0)
+
+    def test_alert_migration_adds_cc_columns(self):
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "alerts.db")
+            conn = sqlite3.connect(path)
+            conn.execute(
+                "CREATE TABLE alerts (id TEXT PRIMARY KEY, chat_id INTEGER, "
+                "symbol TEXT, target REAL, direction TEXT, message TEXT, "
+                "created_at INTEGER)")
+            conn.execute(
+                "INSERT INTO alerts VALUES ('AAAA', 1, 'XAUUSD', 2450.0, "
+                "'CROSSING_UP', 'note', 0)")
+            conn.commit()
+            conn.close()
+            s = alerts.AlertStore(path)
+            cols = {r[1] for r in s._db.execute("PRAGMA table_info(alerts)")}
+            self.assertIn("cc_timeframe", cols)
+            self.assertIn("cc_price", cols)
+            rows = s.for_chat(1)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].cc_timeframe, "")
+            self.assertEqual(rows[0].cc_price, 0.0)
             s.close()
 
 

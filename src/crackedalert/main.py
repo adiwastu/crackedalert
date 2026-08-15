@@ -16,8 +16,8 @@ from telegram.constants import ParseMode
 from telegram.ext import Application
 
 from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
-                     CandleAlertStore, CROSSING_UP, KIND_SL, KIND_TP,
-                     direction_for_side)
+                     CandleAlertStore, CANDLE_ABOVE, CANDLE_BELOW,
+                     CROSSING_UP, KIND_SL, KIND_TP, direction_for_side)
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
 from .bot.handlers import Handlers
@@ -27,7 +27,7 @@ from .ctrader import client as ct
 from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
 from .ctrader.tokens import TokenError, TokenStore
-from .ctrader.trading import TradingService
+from .ctrader.trading import TradingService, TradeRejected
 
 log = logging.getLogger("crackedalert.main")
 
@@ -175,13 +175,40 @@ async def _run_bot(settings: Settings) -> None:
             "auto SL hit for trade %s" % pos_id,
             kind=KIND_SL, trade_id=pos_id, account=alert.account)
 
+        # CC guard for pending orders: guard params were stored on the entry alert
+        if alert.cc_timeframe and alert.cc_price:
+            cc_direction = (CANDLE_BELOW if side == "BUY" else CANDLE_ABOVE)
+            cc_guard = candle_store.create(
+                alert.chat_id, alert.symbol, alert.cc_timeframe,
+                alert.cc_price, cc_direction,
+                "cc guard for position %s" % pos_id,
+                action="close", position_id=int(pos_id),
+                account=alert.account)
+            candle_feed.add_symbol(alert.symbol, alert.cc_timeframe)
+            log.info("cc guard %s created on fill: pos=%s %s %s",
+                     cc_guard.id, pos_id, alert.symbol, alert.cc_timeframe)
+            await notify(alert.chat_id, fmt.cc_guard_set(cc_guard))
+
     engine = AlertEngine(store, notify, fmt.alert_fired,
                          on_entry_hit=on_entry_hit, on_broadcast=broadcast)
     feed = FeedService(markets[feed_account.environment],
                        feed_account.ctid_account_id, engine)
     markets[feed_account.environment].add_tick_listener(feed.on_tick)
 
-    candle_engine = CandleAlertEngine(candle_store, notify, fmt.candle_alert_fired)
+    async def on_cc_close(alert) -> None:
+        try:
+            await trader.close_position(alert.account, alert.position_id)
+            await broadcast(fmt.cc_guard_fired(alert))
+        except TradeRejected as e:
+            if "not found" in str(e).lower():
+                log.info("cc guard %s: position %d already gone: %s",
+                         alert.id, alert.position_id, e)
+                await broadcast(fmt.cc_guard_position_gone(alert))
+            else:
+                raise
+
+    candle_engine = CandleAlertEngine(candle_store, notify, fmt.candle_alert_fired,
+                                      on_close_hit=on_cc_close)
     candle_feed = CandleFeed(clients[feed_account.environment],
                              markets[feed_account.environment],
                              feed_account.ctid_account_id, candle_engine)

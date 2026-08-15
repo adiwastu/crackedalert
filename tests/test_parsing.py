@@ -114,6 +114,53 @@ class TradeParsing(unittest.TestCase):
         with self.assertRaises(handlers.ParseError):
             handlers.parse_trade("/m 2440.00 y 2 $abc demo", is_market=True)
 
+    def test_market_with_cc_guard(self):
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k M15 4080",
+                                 is_market=True)
+        self.assertEqual(t.cc_timeframe, "M15")
+        self.assertEqual(t.cc_price, 4080.0)
+
+    def test_market_without_cc_guard(self):
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k", is_market=True)
+        self.assertIsNone(t.cc_timeframe)
+        self.assertIsNone(t.cc_price)
+
+    def test_pending_with_cc_guard(self):
+        t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k H1 2445",
+                                 is_market=False)
+        self.assertEqual(t.cc_timeframe, "H1")
+        self.assertEqual(t.cc_price, 2445.0)
+
+    def test_pending_without_cc_guard(self):
+        t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k",
+                                 is_market=False)
+        self.assertIsNone(t.cc_timeframe)
+        self.assertIsNone(t.cc_price)
+
+    def test_market_bad_cc_timeframe_raises(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k X99 4080",
+                                 is_market=True)
+
+    def test_pending_bad_cc_timeframe_raises(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/p 2450 2440 y 2 0.5 10k X99 2445",
+                                 is_market=False)
+
+    def test_market_cc_price_not_number_raises(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k M15 abc",
+                                 is_market=True)
+
+    def test_market_only_one_cc_arg_raises(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k M15", is_market=True)
+
+    def test_pending_only_one_cc_arg_raises(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/p 2450 2440 y 2 0.5 10k H1",
+                                 is_market=False)
+
 
 class CandleAlertParsing(unittest.TestCase):
     def test_full(self):

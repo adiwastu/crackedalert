@@ -8,6 +8,9 @@ Kind-aware: manual /alert (kind='manual') notifies the initiating chat.
 Trade auto-alerts (kind='entry'|'tp'|'sl') broadcast to every subscriber:
 an 'entry' alert, on hit, confirms the position actually exists, then
 creates 'tp' and 'sl' alerts from the position's real SL/TP.
+
+CC (candle-close) guards: action='close' on CandleAlert triggers a
+position close callback instead of a notify.
 """
 
 import logging
@@ -41,7 +44,9 @@ CREATE TABLE IF NOT EXISTS alerts (
     created_at INTEGER NOT NULL,
     kind       TEXT NOT NULL DEFAULT 'manual',
     trade_id   TEXT NOT NULL DEFAULT '',
-    account    TEXT NOT NULL DEFAULT ''
+    account    TEXT NOT NULL DEFAULT '',
+    cc_timeframe TEXT NOT NULL DEFAULT '',
+    cc_price     REAL NOT NULL DEFAULT 0
 );
 """
 
@@ -74,6 +79,8 @@ class Alert:
     kind: str = KIND_MANUAL
     trade_id: str = ""
     account: str = ""
+    cc_timeframe: str = ""
+    cc_price: float = 0.0
 
 
 class AlertStore:
@@ -89,7 +96,9 @@ class AlertStore:
         cols = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
         for col, ddl in (("kind", "TEXT NOT NULL DEFAULT 'manual'"),
                          ("trade_id", "TEXT NOT NULL DEFAULT ''"),
-                         ("account", "TEXT NOT NULL DEFAULT ''")):
+                         ("account", "TEXT NOT NULL DEFAULT ''"),
+                         ("cc_timeframe", "TEXT NOT NULL DEFAULT ''"),
+                         ("cc_price", "REAL NOT NULL DEFAULT 0")):
             if col not in cols:
                 self._db.execute(
                     "ALTER TABLE alerts ADD COLUMN %s %s" % (col, ddl))
@@ -109,29 +118,33 @@ class AlertStore:
     def create(self, chat_id: int, symbol: str, target: float,
                direction: str, message: str,
                kind: str = KIND_MANUAL, trade_id: str = "",
-               account: str = "") -> Alert:
+               account: str = "",
+               cc_timeframe: str = "", cc_price: float = 0.0) -> Alert:
         alert = Alert(self._gen_id(), chat_id, symbol.upper(), target,
-                      direction, message, kind, trade_id, account)
+                      direction, message, kind, trade_id, account,
+                      cc_timeframe, cc_price)
         self._db.execute(
-            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (alert.id, alert.chat_id, alert.symbol, alert.target,
              alert.direction, alert.message, int(time.time()),
-             alert.kind, alert.trade_id, alert.account))
+             alert.kind, alert.trade_id, alert.account,
+             alert.cc_timeframe, alert.cc_price))
         self._db.commit()
         return alert
 
     def for_chat(self, chat_id: int) -> List[Alert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, target, direction, message, "
-            "kind, trade_id, account FROM alerts WHERE chat_id = ? "
-            "ORDER BY created_at",
+            "kind, trade_id, account, cc_timeframe, cc_price "
+            "FROM alerts WHERE chat_id = ? ORDER BY created_at",
             (chat_id,)).fetchall()
         return [Alert(*row) for row in rows]
 
     def for_symbol(self, symbol: str) -> List[Alert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, target, direction, message, "
-            "kind, trade_id, account FROM alerts WHERE symbol = ?",
+            "kind, trade_id, account, cc_timeframe, cc_price "
+            "FROM alerts WHERE symbol = ?",
             (symbol.upper(),)).fetchall()
         return [Alert(*row) for row in rows]
 
@@ -291,10 +304,18 @@ CREATE TABLE IF NOT EXISTS candle_alerts (
     target     REAL NOT NULL,
     direction  TEXT NOT NULL,
     message    TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    action      TEXT NOT NULL DEFAULT 'notify',
+    position_id INTEGER NOT NULL DEFAULT 0,
+    account     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_candle_alerts_key
     ON candle_alerts(symbol, timeframe);
+"""
+
+CANDLE_SCHEMA_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_candle_alerts_position
+    ON candle_alerts(position_id);
 """
 
 
@@ -307,13 +328,30 @@ class CandleAlert:
     target: float
     direction: str
     message: str
+    action: str = "notify"     # "notify" | "close"
+    position_id: int = 0
+    account: str = ""
 
 
 class CandleAlertStore:
     def __init__(self, db_path: str):
         self._db = sqlite3.connect(db_path)
         self._db.executescript(CANDLE_SCHEMA)
+        self._migrate()
+        self._db.executescript(CANDLE_SCHEMA_INDEXES)
         self._db.commit()
+
+    def _migrate(self) -> None:
+        """Add newer columns to pre-existing DBs (idempotent)."""
+        cols = {r[1] for r in self._db.execute("PRAGMA table_info(candle_alerts)")}
+        for col, ddl in (
+            ("action",      "TEXT NOT NULL DEFAULT 'notify'"),
+            ("position_id", "INTEGER NOT NULL DEFAULT 0"),
+            ("account",     "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if col not in cols:
+                self._db.execute(
+                    "ALTER TABLE candle_alerts ADD COLUMN %s %s" % (col, ddl))
 
     def close(self) -> None:
         self._db.close()
@@ -329,28 +367,35 @@ class CandleAlertStore:
         raise RuntimeError("could not generate a unique candle alert id")
 
     def create(self, chat_id: int, symbol: str, timeframe: str,
-               target: float, direction: str, message: str) -> CandleAlert:
+               target: float, direction: str, message: str,
+               action: str = "notify", position_id: int = 0,
+               account: str = "") -> CandleAlert:
         alert = CandleAlert(self._gen_id(), chat_id, symbol.upper(),
-                            timeframe.upper(), target, direction, message)
+                            timeframe.upper(), target, direction, message,
+                            action, position_id, account)
         self._db.execute(
-            "INSERT INTO candle_alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO candle_alerts "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (alert.id, alert.chat_id, alert.symbol, alert.timeframe,
              alert.target, alert.direction, alert.message,
-             int(time.time())))
+             int(time.time()), alert.action, alert.position_id,
+             alert.account))
         self._db.commit()
         return alert
 
     def for_chat(self, chat_id: int) -> List[CandleAlert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, timeframe, target, direction, "
-            "message FROM candle_alerts WHERE chat_id = ? ORDER BY created_at",
+            "message, action, position_id, account "
+            "FROM candle_alerts WHERE chat_id = ? ORDER BY created_at",
             (chat_id,)).fetchall()
         return [CandleAlert(*row) for row in rows]
 
     def for_key(self, symbol: str, timeframe: str) -> List[CandleAlert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, timeframe, target, direction, "
-            "message FROM candle_alerts WHERE symbol = ? AND timeframe = ?",
+            "message, action, position_id, account "
+            "FROM candle_alerts WHERE symbol = ? AND timeframe = ?",
             (symbol.upper(), timeframe.upper())).fetchall()
         return [CandleAlert(*row) for row in rows]
 
@@ -371,15 +416,29 @@ class CandleAlertStore:
             "DELETE FROM candle_alerts WHERE id = ?", (alert_id,))
         self._db.commit()
 
+    def cancel_for_position(self, position_id: int) -> int:
+        """Delete all CC guard alerts linked to a position. Returns count."""
+        cur = self._db.execute(
+            "DELETE FROM candle_alerts WHERE position_id = ? AND action = 'close'",
+            (position_id,))
+        self._db.commit()
+        return cur.rowcount
+
 
 class CandleAlertEngine:
-    """Consumes closed-bar events, fires crossed candle alerts, deletes them."""
+    """Consumes closed-bar events, fires crossed candle alerts, deletes them.
+
+    If the alert has action='close', invokes the on_close_hit callback instead
+    of a notify. If on_close_hit raises, the alert is kept for retry.
+    """
 
     def __init__(self, store: CandleAlertStore, notify: Notifier,
-                 format_fired: Formatter):
+                 format_fired: Formatter,
+                 on_close_hit: Optional[Callable] = None):
         self._store = store
         self._notify = notify
         self._format = format_fired
+        self._on_close_hit = on_close_hit
 
     async def on_closed_bar(self, symbol: str, timeframe: str,
                             close: float, ts_minutes: int) -> None:
@@ -392,6 +451,18 @@ class CandleAlertEngine:
             log.info("candle alert %s fired: %s %s closed %.5f vs %s",
                      alert.id, alert.symbol, alert.timeframe, close,
                      alert.target)
+
+            if alert.action == "close" and self._on_close_hit is not None:
+                try:
+                    await self._on_close_hit(alert)
+                except Exception:
+                    log.exception("cc guard close failed for %s -- keeping",
+                                  alert.id)
+                    continue
+                self._store.delete(alert.id)
+                continue
+
+            # existing notify path
             try:
                 await self._notify(alert.chat_id, self._format(alert))
             except Exception:

@@ -50,6 +50,8 @@ class TradeArgs:
     risk_pct: float
     account: str
     risk_usd: Optional[float] = None   # dollar amount, $ prefix; else pct
+    cc_timeframe: Optional[str] = None   # e.g. "M15"; None = no guard
+    cc_price: Optional[float] = None
 
 
 def parse_alert(text: str, default_symbol: str,
@@ -84,13 +86,14 @@ def parse_alert(text: str, default_symbol: str,
 
 
 def parse_trade(text: str, is_market: bool) -> TradeArgs:
-    """/m <sl> <widen> <rr> <risk%> <account>
-       /p <entry> <sl> <widen> <rr> <risk%> <account>"""
+    """/m <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>]
+       /p <entry> <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>]"""
     tokens = text.split()[1:]
-    expected = 5 if is_market else 6
-    if len(tokens) != expected:
-        raise ParseError("expected %d arguments, got %d"
-                         % (expected, len(tokens)))
+    base = 5 if is_market else 6
+    if len(tokens) not in (base, base + 2):
+        raise ParseError(
+            "expected %d arguments (or %d with CC guard), got %d"
+            % (base, base + 2, len(tokens)))
     try:
         if is_market:
             entry = None
@@ -127,9 +130,24 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
     if risk_usd is not None and risk_usd <= 0:
         raise ParseError("risk amount must be positive")
 
+    # CC guard (optional)
+    cc_timeframe = None
+    cc_price = None
+    if len(tokens) == base + 2:
+        cc_timeframe = tokens[base].upper()
+        if cc_timeframe not in candles_mod.TIMEFRAMES:
+            raise ParseError(
+                "cc guard timeframe '%s' is not valid. Use: %s"
+                % (cc_timeframe, " ".join(candles_mod.TIMEFRAMES)))
+        try:
+            cc_price = float(tokens[base + 1])
+        except ValueError:
+            raise ParseError("cc guard price is not a number")
+
     return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
                      rr=rr, risk_pct=risk_pct, account=account,
-                     risk_usd=risk_usd)
+                     risk_usd=risk_usd,
+                     cc_timeframe=cc_timeframe, cc_price=cc_price)
 
 
 def _is_number(token: str) -> bool:
@@ -399,6 +417,8 @@ class Handlers:
         for r in results:
             if r.get("ok") and r.get("id") is not None:
                 self._store.cancel_auto(str(r["id"]))
+                if self._candle_store is not None:
+                    self._candle_store.cancel_for_position(int(r["id"]))
         await self._reply(update, fmt.close_all_result(account, results))
 
     async def close_position(self, update: Update,
@@ -431,6 +451,10 @@ class Handlers:
             return
         # cancel auto TP/SL alerts tied to the closed position
         self._store.cancel_auto(str(position_id))
+        if self._candle_store is not None:
+            n = self._candle_store.cancel_for_position(position_id)
+            if n:
+                log.info("cancelled %d cc guard(s) for position %d", n, position_id)
         await self._reply(update, fmt.close_success(account, position_id))
 
     async def cancel_order(self, update: Update,
@@ -597,13 +621,27 @@ class Handlers:
             widen_label=plan.widen_label, digits=symbol.digits,
             dollar_risk=args.risk_usd is not None))
 
-        # Auto trade alerts: entry alert for this order; on entry hit the
-        # engine confirms the position and creates TP/SL alerts.
-        self._create_entry_alert(update, plan, symbol.name, result,
-                                 args.account)
+        if is_market:
+            self._create_entry_alert(update, plan, symbol.name, result,
+                                     args.account)
+            if args.cc_timeframe and args.cc_price is not None:
+                if self._candle_store is not None and self._candle_feed is not None:
+                    await self._attach_cc_guard(update, plan, args, result)
+                else:
+                    await self._reply(update,
+                        "warning: cc guard requested but candle feed is not available.")
+        else:
+            # Pending: store guard params on entry alert; guard created in on_entry_hit
+            self._create_entry_alert(update, plan, symbol.name, result,
+                                     args.account,
+                                     cc_timeframe=args.cc_timeframe,
+                                     cc_price=args.cc_price)
+            if args.cc_timeframe:
+                await self._reply(update, fmt.cc_guard_pending(args.cc_timeframe, args.cc_price))
 
     def _create_entry_alert(self, update: Update, plan, symbol_name: str,
-                            result, account: str) -> None:
+                            result, account: str,
+                            cc_timeframe=None, cc_price=None) -> None:
         """Create an 'entry' auto-alert for a just-placed order. The engine
         fires it when the entry is hit, confirms the position, then creates
         TP/SL alerts broadcast to all subscribers."""
@@ -614,6 +652,54 @@ class Handlers:
             update.effective_chat.id, symbol_name, target, direction,
             "auto entry %s %s" % (plan.direction, symbol_name),
             kind=alerts_mod.KIND_ENTRY, trade_id=trade_id,
-            account=account)
+            account=account,
+            cc_timeframe=cc_timeframe or "",
+            cc_price=cc_price or 0.0)
         log.info("auto entry alert %s created: %s %s trade=%s",
                  alert.id, alert.symbol, alert.target, trade_id)
+
+    async def _attach_cc_guard(self, update: Update, plan,
+                               args: TradeArgs, result) -> None:
+        """Create the CC guard for a market order right after confirming the
+        position exists."""
+        try:
+            position = await self._trader.confirm_position(
+                args.account, self._symbol, plan.direction,
+                plan.entry_ref,
+                str(result.order_id) if result.order_id else "")
+        except Exception:
+            log.exception("cc guard: confirm_position failed for %s", args.account)
+            await self._reply(update,
+                "trade placed, but cc guard could not be set "
+                "(position confirm failed \u2014 use /ccalert manually).")
+            return
+
+        if position is None:
+            await self._reply(update,
+                "trade placed, but cc guard could not be set "
+                "(position not found after fill \u2014 use /ccalert manually).")
+            return
+
+        position_id = int(position.get("positionId", 0))
+        if position_id == 0:
+            await self._reply(update,
+                "trade placed, but cc guard could not be set (no positionId).")
+            return
+
+        # BUY: guard fires if candle closes BELOW threshold
+        # SELL: guard fires if candle closes ABOVE threshold
+        cc_direction = (alerts_mod.CANDLE_BELOW
+                        if plan.direction == "BUY"
+                        else alerts_mod.CANDLE_ABOVE)
+
+        alert = self._candle_store.create(
+            update.effective_chat.id, self._symbol, args.cc_timeframe,
+            args.cc_price, cc_direction,
+            "cc guard for position %d" % position_id,
+            action="close", position_id=position_id, account=args.account)
+
+        self._candle_feed.add_symbol(self._symbol, args.cc_timeframe)
+        log.info("cc guard %s: pos=%d %s %s close-%s %.5f",
+                 alert.id, position_id, self._symbol, args.cc_timeframe,
+                 cc_direction, args.cc_price)
+        await self._reply(update, fmt.cc_guard_set(alert))

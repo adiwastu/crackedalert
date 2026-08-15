@@ -109,10 +109,12 @@ def cancel_usage() -> str:
 
 def trade_usage(is_market: bool) -> str:
     if is_market:
-        return usage("/m", "[sl] [widen:y/n] [rr] [risk%] [account]",
-                     "/m 2440.00 y 2 0.5 10k")
-    return usage("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account]",
-                 "/p 2450.00 2455.00 n 3 1 5k")
+        return usage("/m",
+                     "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
+                     "/m 2440.00 y 2 0.5 10k M15 4080")
+    return usage("/p",
+                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
+                 "/p 2450.00 2455.00 n 3 1 5k H1 2445")
 
 
 def positions_usage(is_positions: bool) -> str:
@@ -196,10 +198,10 @@ def account_not_found(account: str) -> str:
 
 _HELP_SECTIONS = [
     ("execute", [
-        ("/m", "[sl] [widen:y/n] [rr] [risk%] [account]",
-         "/m 2440.00 y 2 0.5 10k"),
-        ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account]",
-         "/p 2450.00 2455.00 n 3 1 5k"),
+        ("/m", "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
+         "/m 2440.00 y 2 0.5 10k M15 4080"),
+        ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
+         "/p 2450.00 2455.00 n 3 1 5k H1 2445"),
     ]),
     ("manage", [
         ("/be", "[account]", "move SL to breakeven + spread"),
@@ -450,8 +452,9 @@ def candle_alert_list(alerts: List[CandleAlert]) -> str:
     lines = ["active candle alerts:"]
     for a in alerts:
         direction = "above" if a.direction == CANDLE_ABOVE else "below"
-        lines.append("(%s)  %s %s close %s %s - %s"
-                     % (esc(a.id), esc(a.symbol), esc(a.timeframe),
+        tag = " [guard #%d]" % a.position_id if a.action == "close" else ""
+        lines.append("(%s)%s  %s %s close %s %s - %s"
+                     % (esc(a.id), esc(tag), esc(a.symbol), esc(a.timeframe),
                         esc(direction), _trim(a.target), esc(a.message)))
     return "\n".join(lines)
 
@@ -462,6 +465,41 @@ def candle_cancelled(alert_id: str) -> str:
 
 def candle_cancel_not_found(alert_id: str) -> str:
     return "id %s not found or doesn't belong to you." % esc(alert_id)
+
+
+# --------------------------------------------------------------------------
+# CC guards (candle-close position auto-close)
+# --------------------------------------------------------------------------
+
+def cc_guard_set(alert: CandleAlert) -> str:
+    direction = "below" if alert.direction == CANDLE_BELOW else "above"
+    return (
+        "\U0001F6E1 CC guard set (id: %s)\n"
+        "%s %s \u00b7 close %s %s \u2192 position %d auto-closes."
+        % (esc(alert.id), esc(alert.symbol), esc(alert.timeframe),
+           esc(direction), _trim(alert.target), alert.position_id))
+
+
+def cc_guard_pending(timeframe: str, price: float) -> str:
+    return (
+        "\U0001F6E1 CC guard queued: %s close @ %s.\n"
+        "Guard activates when this order fills."
+        % (esc(timeframe), _trim(price)))
+
+
+def cc_guard_fired(alert: CandleAlert) -> str:
+    direction = "below" if alert.direction == CANDLE_BELOW else "above"
+    return (
+        "\U0001F6E1 CC guard triggered! (id: %s)\n"
+        "%s %s closed %s %s \u2014 position %d closed."
+        % (esc(alert.id), esc(alert.symbol), esc(alert.timeframe),
+           esc(direction), _trim(alert.target), alert.position_id))
+
+
+def cc_guard_position_gone(alert: CandleAlert) -> str:
+    return (
+        "CC guard %s: position %d already closed (SL/TP hit). Guard removed."
+        % (esc(alert.id), alert.position_id))
 
 
 # --------------------------------------------------------------------------
