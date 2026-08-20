@@ -72,7 +72,16 @@ rm -rf /var/www/crackedalert-ui
 mkdir -p /var/www/crackedalert-ui
 cp -r "$REPO_DIR/frontend/." /var/www/crackedalert-ui/
 
-CADDY_MARKER='site hotland3x3.my.id (crackedalert-ui)'
+# Migrate the legacy root-domain block (hotland3x3.my.id) if it was
+# previously auto-managed, so a rerun moves the site to the subdomain
+# instead of leaving a stale duplicate block behind.
+legacy_marker='site hotland3x3.my.id (crackedalert-ui)'
+if grep -qF "$legacy_marker" /etc/caddy/Caddyfile; then
+    echo "=> Migrating legacy UI site block (hotland3x3.my.id) -> alert.hotland3x3.my.id"
+    sed -i "/^# $legacy_marker -- auto-managed by deploy_v2.sh/,/^}/d" /etc/caddy/Caddyfile
+fi
+
+CADDY_MARKER='site alert.hotland3x3.my.id (crackedalert-ui)'
 if ! grep -qF "$CADDY_MARKER" /etc/caddy/Caddyfile; then
     echo "=> Appending UI site block to /etc/caddy/Caddyfile..."
     {
@@ -88,7 +97,7 @@ if command -v caddy >/dev/null 2>&1; then
     caddy validate --config /etc/caddy/Caddyfile
 fi
 systemctl reload caddy
-echo "✅ UI live at http://hotland3x3.my.id/ui.html"
+echo "✅ UI live at http://alert.hotland3x3.my.id/ui.html"
 
 # ==========================================
 # CUTOVER (Phase 5): retire the bash stack.

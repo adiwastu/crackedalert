@@ -22,7 +22,15 @@ class DeployContractTest(unittest.TestCase):
             "deploy/caddy-ui.caddyfile must exist for deploy_v2.sh step 6",
         )
         text = CADDY_UI_PATH.read_text(encoding="utf-8")
-        self.assertIn("hotland3x3.my.id", text)
+        # Collect only top-level site-block hosts so the subdomain prefix
+        # (alert.hotland3x3.my.id) can't false-positive/miss a legacy block.
+        hosts = [
+            line.split()[0]
+            for line in text.splitlines()
+            if line.strip().endswith("{")
+            and not line.startswith(("\t", " "))
+        ]
+        self.assertEqual(hosts, ["alert.hotland3x3.my.id"])
         self.assertIn("/var/www/crackedalert-ui", text)
 
     def test_no_repo_dir_placeholder_in_deploy_config(self) -> None:
@@ -48,6 +56,14 @@ class DeployContractTest(unittest.TestCase):
         self.assertIn("/var/www/crackedalert-ui", text)
         self.assertIn("deploy/caddy-ui.caddyfile", text)
         self.assertIn("systemctl reload caddy", text)
+
+    def test_deploy_script_uses_subdomain_and_migrates_legacy(self) -> None:
+        text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("site alert.hotland3x3.my.id (crackedalert-ui)", text)
+        self.assertIn("alert.hotland3x3.my.id/ui.html", text)
+        # The legacy root-domain block must be removed, not left duplicate.
+        self.assertIn("Migrating legacy UI site block", text)
+        self.assertIn("site hotland3x3.my.id (crackedalert-ui)", text)
 
 
 if __name__ == "__main__":
