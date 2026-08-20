@@ -1,0 +1,5 @@
+hotland3x3.my.id {
+	root * /var/www/crackedalert-ui
+	redir / /ui.html 302
+	file_server
+}

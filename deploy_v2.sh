@@ -63,19 +63,31 @@ else
     exit 1
 fi
 
-# 6. Frontend (static command-builder UI) via nginx
-echo "=> Ensuring nginx + installing UI site..."
-if ! command -v nginx >/dev/null 2>&1; then
-    echo "   nginx not found -- installing..."
-    apt-get update -qq
-    apt-get install -y -qq nginx
+# 6. Frontend (static command-builder UI) via Caddy
+# Caddy owns :80 on this box (fronts geararea at :8080), so we serve the
+# UI from a fixed path under /var/www instead of running a second web
+# server. The site block is idempotently appended to /etc/caddy/Caddyfile.
+echo "=> Installing UI site into /var/www/crackedalert-ui..."
+rm -rf /var/www/crackedalert-ui
+mkdir -p /var/www/crackedalert-ui
+cp -r "$REPO_DIR/frontend/." /var/www/crackedalert-ui/
+
+CADDY_MARKER='site hotland3x3.my.id (crackedalert-ui)'
+if ! grep -qF "$CADDY_MARKER" /etc/caddy/Caddyfile; then
+    echo "=> Appending UI site block to /etc/caddy/Caddyfile..."
+    {
+        echo ""
+        echo "# $CADDY_MARKER -- auto-managed by deploy_v2.sh"
+        cat "$REPO_DIR/deploy/caddy-ui.caddyfile"
+    } >> /etc/caddy/Caddyfile
+else
+    echo "=> UI site block already present -- skipping append."
 fi
-sed "s|%REPO_DIR%|$REPO_DIR|g" "$REPO_DIR/deploy/nginx-ui.conf" \
-    > /etc/nginx/sites-available/crackedalert-ui
-ln -sf /etc/nginx/sites-available/crackedalert-ui /etc/nginx/sites-enabled/crackedalert-ui
-nginx -t
-systemctl enable nginx
-systemctl reload nginx
+
+if command -v caddy >/dev/null 2>&1; then
+    caddy validate --config /etc/caddy/Caddyfile
+fi
+systemctl reload caddy
 echo "✅ UI live at http://hotland3x3.my.id/ui.html"
 
 # ==========================================
