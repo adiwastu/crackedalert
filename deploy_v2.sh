@@ -63,6 +63,21 @@ else
     exit 1
 fi
 
+# 6. Frontend (static command-builder UI) via nginx
+echo "=> Ensuring nginx + installing UI site..."
+if ! command -v nginx >/dev/null 2>&1; then
+    echo "   nginx not found -- installing..."
+    apt-get update -qq
+    apt-get install -y -qq nginx
+fi
+sed "s|%REPO_DIR%|$REPO_DIR|g" "$REPO_DIR/deploy/nginx-ui.conf" \
+    > /etc/nginx/sites-available/crackedalert-ui
+ln -sf /etc/nginx/sites-available/crackedalert-ui /etc/nginx/sites-enabled/crackedalert-ui
+nginx -t
+systemctl enable nginx
+systemctl reload nginx
+echo "✅ UI live at http://hotland3x3.my.id/ui.html"
+
 # ==========================================
 # CUTOVER (Phase 5): retire the bash stack.
 # ==========================================

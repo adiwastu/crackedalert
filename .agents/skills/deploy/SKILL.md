@@ -21,7 +21,7 @@ Run `python -m unittest discover -s tests -q` and confirm 0 failures. If not alr
 - Push: `git push` (the VPS pulls `origin main`).
 
 ### 3. Flag backend changes
-This repo is a backend-only service — there is **no frontend deploy**. Every change is a backend change; the user deploys on the VPS manually. State that explicitly.
+This repo is a backend service plus a static frontend UI (`frontend/ui.html`). `deploy_v2.sh` handles both: it installs/updates the backend service **and** renders `deploy/nginx-ui.conf` into `/etc/nginx/sites-available/crackedalert-ui` then reloads nginx. If the change touches the frontend, mention the live URL to verify.
 
 ### 4. Give the VPS deploy command
 The exact command the user runs on the VPS:
@@ -30,13 +30,13 @@ ssh root@104.64.205.15
 cd ~/crackedalert
 sudo ./deploy_v2.sh
 ```
-- `deploy_v2.sh` does: `git pull origin main`, installs into the venv, runs the connection smoke test (`python -m crackedalert --smoke`), and restarts the `cracked-bot` systemd service.
-- If a bare pull + manual restart is preferred: `cd ~/crackedalert && git pull`, then `sudo systemctl restart cracked-bot` (after venv install).
+- `deploy_v2.sh` does: `git pull origin main`, installs into the venv, runs the connection smoke test (`python -m crackedalert --smoke`), restarts the `cracked-bot` systemd service, and installs/reloads nginx for the static UI at `http://hotland3x3.my.id/ui.html`.
+- If a bare pull + manual restart is preferred: `cd ~/crackedalert && git pull`, then `sudo systemctl restart cracked-bot` (after venv install). For frontend-only changes, `sudo nginx -t && sudo systemctl reload nginx` is enough after `git pull`.
 - DB migrations (e.g. new columns) run automatically on service start — no manual migration needed.
-- Check: `systemctl status cracked-bot` and `journalctl -u cracked-bot -f`.
+- Check: `systemctl status cracked-bot` and `journalctl -u cracked-bot -f`; UI check: visit `http://hotland3x3.my.id/ui.html`.
 
 ### 5. Report
-Report: (1) git commit hash + push confirmation, (2) test result, (3) clear statement that this is a backend-only change, (4) the exact SSH deploy command.
+Report: (1) git commit hash + push confirmation, (2) test result, (3) whether the change is backend, frontend, or both, (4) the exact SSH deploy command.
 
 ## Notes
 - Treat tests as non-interactive: run them, wait for them to finish, don't bail early.
