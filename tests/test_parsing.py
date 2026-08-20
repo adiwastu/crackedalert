@@ -47,6 +47,21 @@ class AlertParsing(unittest.TestCase):
         self.assertEqual(a.symbol, "XAUUSD")
         self.assertEqual(a.message, "2500 wait what")
 
+    def test_broadcast_flag_stripped(self):
+        a = handlers.parse_alert("/alert 2450 approaching demand --all",
+                                 "XAUUSD", self.KNOWN)
+        self.assertTrue(a.broadcast)
+        self.assertEqual((a.target, a.symbol), (2450.0, "XAUUSD"))
+        self.assertEqual(a.message, "approaching demand")
+
+        b = handlers.parse_alert("/alert 2450 approach -all", "XAUUSD")
+        self.assertTrue(b.broadcast)
+        self.assertEqual(b.message, "approach")
+
+    def test_no_broadcast_default(self):
+        a = handlers.parse_alert("/alert 2450 plain note", "XAUUSD")
+        self.assertFalse(a.broadcast)
+
     def test_missing_target_raises(self):
         with self.assertRaises(handlers.ParseError):
             handlers.parse_alert("/alert", "XAUUSD")
@@ -199,6 +214,21 @@ class CandleAlertParsing(unittest.TestCase):
     def test_bad_price(self):
         with self.assertRaises(handlers.ParseError):
             handlers.parse_cc_alert("/ccalert M15 abc above", "XAUUSD")
+
+    def test_broadcast_flag(self):
+        a = handlers.parse_cc_alert(
+            "/ccalert M15 2450 above XAUUSD breakout --all", "XAUUSD")
+        self.assertTrue(a.broadcast)
+        self.assertEqual(a.symbol, "XAUUSD")
+        self.assertEqual(a.message, "breakout")
+
+        b = handlers.parse_cc_alert("/ccalert M15 2450 above --all", "XAUUSD")
+        self.assertTrue(b.broadcast)
+        self.assertEqual(b.symbol, "XAUUSD")
+
+    def test_no_broadcast_default(self):
+        a = handlers.parse_cc_alert("/ccalert M15 2450 above", "XAUUSD")
+        self.assertFalse(a.broadcast)
 
 
 if __name__ == "__main__":

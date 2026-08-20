@@ -39,6 +39,7 @@ class AlertArgs:
     target: float
     symbol: str
     message: str
+    broadcast: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ def parse_alert(text: str, default_symbol: str,
         raise ParseError("usage")
 
     rest = tokens[1:]
+    broadcast = _pop_broadcast(rest)
     symbol = default_symbol
     if rest and not _is_number(rest[0]) and SYMBOL_RE.match(rest[0].upper()):
         candidate = rest[0].upper()
@@ -82,7 +84,8 @@ def parse_alert(text: str, default_symbol: str,
             symbol = candidate
             rest = rest[1:]
     message = " ".join(rest) if rest else DEFAULT_ALERT_MESSAGE
-    return AlertArgs(target=target, symbol=symbol, message=message)
+    return AlertArgs(target=target, symbol=symbol, message=message,
+                     broadcast=broadcast)
 
 
 def parse_trade(text: str, is_market: bool) -> TradeArgs:
@@ -158,6 +161,21 @@ def _is_number(token: str) -> bool:
         return False
 
 
+def _pop_broadcast(tokens: list) -> bool:
+    """Strip a trailing --all / -all flag from the token list.
+
+    Returns True if the flag was present. Mutates `tokens` in place so
+    callers can build the message from the remaining words.
+    """
+    if not tokens:
+        return False
+    last = tokens[-1]
+    if last.lower() in ("--all", "-all", "--broadcast", "-a"):
+        tokens.pop()
+        return True
+    return False
+
+
 @dataclass(frozen=True)
 class CandleAlertArgs:
     timeframe: str
@@ -165,6 +183,7 @@ class CandleAlertArgs:
     direction: str     # ABOVE | BELOW
     symbol: str
     message: str
+    broadcast: bool = False
 
 
 def parse_cc_alert(text: str, default_symbol: str) -> CandleAlertArgs:
@@ -189,6 +208,7 @@ def parse_cc_alert(text: str, default_symbol: str) -> CandleAlertArgs:
         raise ParseError("direction")
 
     rest = tokens[3:]
+    broadcast = _pop_broadcast(rest)
     symbol = default_symbol
     if rest and SYMBOL_RE.match(rest[0].upper()) and rest[0].isupper():
         symbol = rest[0].upper()
@@ -196,7 +216,7 @@ def parse_cc_alert(text: str, default_symbol: str) -> CandleAlertArgs:
     message = " ".join(rest) if rest else "timeframe candle target reached."
     return CandleAlertArgs(timeframe=timeframe, target=target,
                            direction=direction, symbol=symbol,
-                           message=message)
+                           message=message, broadcast=broadcast)
 
 
 class Handlers:
@@ -313,9 +333,11 @@ class Handlers:
 
         direction = alerts_mod.infer_direction(live_mid, args.target)
         alert = self._store.create(update.effective_chat.id, args.symbol,
-                                   args.target, direction, args.message)
-        log.info("alert %s created: %s %s %s", alert.id, alert.symbol,
-                 alert.target, alert.direction)
+                                   args.target, direction, args.message,
+                                   broadcast=args.broadcast)
+        log.info("alert %s created: %s %s %s (broadcast=%s)", alert.id,
+                 alert.symbol, alert.target, alert.direction,
+                 alert.broadcast)
         await self._reply(update, fmt.alert_set(alert, live_mid))
 
     async def list_(self, update: Update,
@@ -535,10 +557,11 @@ class Handlers:
 
         alert = self._candle_store.create(
             update.effective_chat.id, args.symbol, args.timeframe,
-            args.target, args.direction, args.message)
-        log.info("candle alert %s created: %s %s %s %s", alert.id,
-                 alert.symbol, alert.timeframe, alert.direction,
-                 alert.target)
+            args.target, args.direction, args.message,
+            broadcast=args.broadcast)
+        log.info("candle alert %s created: %s %s %s %s (broadcast=%s)",
+                 alert.id, alert.symbol, alert.timeframe, alert.direction,
+                 alert.target, alert.broadcast)
         await self._reply(update, fmt.candle_alert_set(alert, last_close))
 
     async def cc_list(self, update: Update,

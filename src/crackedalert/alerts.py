@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     trade_id   TEXT NOT NULL DEFAULT '',
     account    TEXT NOT NULL DEFAULT '',
     cc_timeframe TEXT NOT NULL DEFAULT '',
-    cc_price     REAL NOT NULL DEFAULT 0
+    cc_price     REAL NOT NULL DEFAULT 0,
+    broadcast    INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -81,6 +82,7 @@ class Alert:
     account: str = ""
     cc_timeframe: str = ""
     cc_price: float = 0.0
+    broadcast: bool = False
 
 
 class AlertStore:
@@ -98,7 +100,8 @@ class AlertStore:
                          ("trade_id", "TEXT NOT NULL DEFAULT ''"),
                          ("account", "TEXT NOT NULL DEFAULT ''"),
                          ("cc_timeframe", "TEXT NOT NULL DEFAULT ''"),
-                         ("cc_price", "REAL NOT NULL DEFAULT 0")):
+                         ("cc_price", "REAL NOT NULL DEFAULT 0"),
+                         ("broadcast", "INTEGER NOT NULL DEFAULT 0")):
             if col not in cols:
                 self._db.execute(
                     "ALTER TABLE alerts ADD COLUMN %s %s" % (col, ddl))
@@ -119,23 +122,24 @@ class AlertStore:
                direction: str, message: str,
                kind: str = KIND_MANUAL, trade_id: str = "",
                account: str = "",
-               cc_timeframe: str = "", cc_price: float = 0.0) -> Alert:
+               cc_timeframe: str = "", cc_price: float = 0.0,
+               broadcast: bool = False) -> Alert:
         alert = Alert(self._gen_id(), chat_id, symbol.upper(), target,
                       direction, message, kind, trade_id, account,
-                      cc_timeframe, cc_price)
+                      cc_timeframe, cc_price, broadcast)
         self._db.execute(
-            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO alerts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (alert.id, alert.chat_id, alert.symbol, alert.target,
              alert.direction, alert.message, int(time.time()),
              alert.kind, alert.trade_id, alert.account,
-             alert.cc_timeframe, alert.cc_price))
+             alert.cc_timeframe, alert.cc_price, int(alert.broadcast)))
         self._db.commit()
         return alert
 
     def for_chat(self, chat_id: int) -> List[Alert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, target, direction, message, "
-            "kind, trade_id, account, cc_timeframe, cc_price "
+            "kind, trade_id, account, cc_timeframe, cc_price, broadcast "
             "FROM alerts WHERE chat_id = ? ORDER BY created_at",
             (chat_id,)).fetchall()
         return [Alert(*row) for row in rows]
@@ -143,7 +147,7 @@ class AlertStore:
     def for_symbol(self, symbol: str) -> List[Alert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, target, direction, message, "
-            "kind, trade_id, account, cc_timeframe, cc_price "
+            "kind, trade_id, account, cc_timeframe, cc_price, broadcast "
             "FROM alerts WHERE symbol = ?",
             (symbol.upper(),)).fetchall()
         return [Alert(*row) for row in rows]
@@ -240,7 +244,9 @@ class AlertEngine:
                 continue
             log.info("alert %s fired: %s crossed %s (mid %.5f)",
                      alert.id, alert.symbol, alert.target, mid)
-            if alert.kind == KIND_MANUAL:
+            if alert.broadcast:
+                await self._fire_broadcast(alert)
+            elif alert.kind == KIND_MANUAL:
                 await self._fire_manual(alert)
             elif alert.kind == KIND_ENTRY:
                 await self._fire_entry(alert)
@@ -253,6 +259,15 @@ class AlertEngine:
         except Exception:
             log.exception("failed to notify chat %d for alert %s -- "
                           "keeping alert", alert.chat_id, alert.id)
+            return
+        self._store.delete(alert.id)
+
+    async def _fire_broadcast(self, alert: Alert) -> None:
+        try:
+            await self._broadcast(alert)
+        except Exception:
+            log.exception("broadcast failed for alert %s -- keeping alert",
+                          alert.id)
             return
         self._store.delete(alert.id)
 
@@ -307,7 +322,8 @@ CREATE TABLE IF NOT EXISTS candle_alerts (
     created_at INTEGER NOT NULL,
     action      TEXT NOT NULL DEFAULT 'notify',
     position_id INTEGER NOT NULL DEFAULT 0,
-    account     TEXT NOT NULL DEFAULT ''
+    account     TEXT NOT NULL DEFAULT '',
+    broadcast   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_candle_alerts_key
     ON candle_alerts(symbol, timeframe);
@@ -331,6 +347,7 @@ class CandleAlert:
     action: str = "notify"     # "notify" | "close"
     position_id: int = 0
     account: str = ""
+    broadcast: bool = False
 
 
 class CandleAlertStore:
@@ -348,6 +365,7 @@ class CandleAlertStore:
             ("action",      "TEXT NOT NULL DEFAULT 'notify'"),
             ("position_id", "INTEGER NOT NULL DEFAULT 0"),
             ("account",     "TEXT NOT NULL DEFAULT ''"),
+            ("broadcast",   "INTEGER NOT NULL DEFAULT 0"),
         ):
             if col not in cols:
                 self._db.execute(
@@ -369,24 +387,24 @@ class CandleAlertStore:
     def create(self, chat_id: int, symbol: str, timeframe: str,
                target: float, direction: str, message: str,
                action: str = "notify", position_id: int = 0,
-               account: str = "") -> CandleAlert:
+               account: str = "", broadcast: bool = False) -> CandleAlert:
         alert = CandleAlert(self._gen_id(), chat_id, symbol.upper(),
                             timeframe.upper(), target, direction, message,
-                            action, position_id, account)
+                            action, position_id, account, broadcast)
         self._db.execute(
             "INSERT INTO candle_alerts "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (alert.id, alert.chat_id, alert.symbol, alert.timeframe,
              alert.target, alert.direction, alert.message,
              int(time.time()), alert.action, alert.position_id,
-             alert.account))
+             alert.account, int(alert.broadcast)))
         self._db.commit()
         return alert
 
     def for_chat(self, chat_id: int) -> List[CandleAlert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, timeframe, target, direction, "
-            "message, action, position_id, account "
+            "message, action, position_id, account, broadcast "
             "FROM candle_alerts WHERE chat_id = ? ORDER BY created_at",
             (chat_id,)).fetchall()
         return [CandleAlert(*row) for row in rows]
@@ -394,7 +412,7 @@ class CandleAlertStore:
     def for_key(self, symbol: str, timeframe: str) -> List[CandleAlert]:
         rows = self._db.execute(
             "SELECT id, chat_id, symbol, timeframe, target, direction, "
-            "message, action, position_id, account "
+            "message, action, position_id, account, broadcast "
             "FROM candle_alerts WHERE symbol = ? AND timeframe = ?",
             (symbol.upper(), timeframe.upper())).fetchall()
         return [CandleAlert(*row) for row in rows]
@@ -434,11 +452,13 @@ class CandleAlertEngine:
 
     def __init__(self, store: CandleAlertStore, notify: Notifier,
                  format_fired: Formatter,
-                 on_close_hit: Optional[Callable] = None):
+                 on_close_hit: Optional[Callable] = None,
+                 on_broadcast: Optional[Broadcaster] = None):
         self._store = store
         self._notify = notify
         self._format = format_fired
         self._on_close_hit = on_close_hit
+        self._on_broadcast = on_broadcast
 
     async def on_closed_bar(self, symbol: str, timeframe: str,
                             close: float, ts_minutes: int) -> None:
@@ -462,6 +482,16 @@ class CandleAlertEngine:
                 self._store.delete(alert.id)
                 continue
 
+            if alert.broadcast:
+                try:
+                    await self._broadcast(alert)
+                except Exception:
+                    log.exception("broadcast failed for candle alert %s -- "
+                                  "keeping alert", alert.id)
+                    continue
+                self._store.delete(alert.id)
+                continue
+
             # existing notify path
             try:
                 await self._notify(alert.chat_id, self._format(alert))
@@ -470,3 +500,8 @@ class CandleAlertEngine:
                               "-- keeping alert", alert.chat_id, alert.id)
                 continue
             self._store.delete(alert.id)
+
+    async def _broadcast(self, alert: CandleAlert) -> None:
+        if self._on_broadcast is None:
+            return
+        await self._on_broadcast(self._format(alert))

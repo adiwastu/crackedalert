@@ -99,8 +99,8 @@ def usage(command: str, args: str = "", example: str = "") -> str:
 
 
 def alert_usage() -> str:
-    return usage("/alert", "[target] [notes]",
-                 "/alert 2450.00 approaching demand")
+    return usage("/alert", "[target] [notes] [--all]",
+                 "/alert 2450.00 approaching demand --all")
 
 
 def cancel_usage() -> str:
@@ -140,8 +140,8 @@ def breakeven_usage() -> str:
 
 
 def candle_alert_usage() -> str:
-    return usage("/ccalert", "[tf] [price] [above|below] [symbol] [notes]",
-                 "/ccalert M15 2450 above XAUUSD breakout")
+    return usage("/ccalert", "[tf] [price] [above|below] [symbol] [notes] [--all]",
+                 "/ccalert M15 2450 above XAUUSD --all")
 
 
 def candle_cancel_usage() -> str:
@@ -210,9 +210,9 @@ _HELP_SECTIONS = [
         ("/cancel_order", "[id] [account]", "cancels one pending order"),
     ]),
     ("alerts", [
-        ("/alert", "[target] [notes]", "/alert 2450.00 approaching demand"),
+        ("/alert", "[target] [notes]", "add --all to broadcast"),
         ("/ccalert", "[tf] [price] [above|below] [symbol] [notes]",
-         "/ccalert M15 2450 above XAUUSD breakout"),
+         "add --all to broadcast"),
         ("/list", "", "active alerts"),
         ("/cancel", "[id]", "delete alert"),
         ("/cclist", "", "active candle alerts"),

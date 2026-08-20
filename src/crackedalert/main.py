@@ -208,7 +208,8 @@ async def _run_bot(settings: Settings) -> None:
                 raise
 
     candle_engine = CandleAlertEngine(candle_store, notify, fmt.candle_alert_fired,
-                                      on_close_hit=on_cc_close)
+                                      on_close_hit=on_cc_close,
+                                      on_broadcast=broadcast)
     candle_feed = CandleFeed(clients[feed_account.environment],
                              markets[feed_account.environment],
                              feed_account.ctid_account_id, candle_engine)

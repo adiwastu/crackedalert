@@ -41,6 +41,18 @@ class StoreTests(unittest.TestCase):
         self.store.create(1, "EURUSD", 2.0, alerts.CROSSING_DOWN, "b")
         self.assertEqual(self.store.active_symbols(), {"XAUUSD", "EURUSD"})
 
+    def test_broadcast_persist_and_default(self):
+        plain = self.store.create(1, "XAUUSD", 1.0, alerts.CROSSING_UP, "p")
+        self.assertFalse(plain.broadcast)
+        bcast = self.store.create(1, "XAUUSD", 2.0, alerts.CROSSING_UP,
+                                  "b", broadcast=True)
+        self.assertTrue(bcast.broadcast)
+        # round-trips through the DB
+        rows = self.store.for_chat(1)
+        by_id = {r.id: r.broadcast for r in rows}
+        self.assertFalse(by_id[plain.id])
+        self.assertTrue(by_id[bcast.id])
+
     def test_tsv_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             tsv = os.path.join(tmp, "cracked_alerts.tsv")
@@ -106,6 +118,91 @@ class EngineTests(unittest.TestCase):
         self.store.create(111, "EURUSD", 1.10, alerts.CROSSING_UP, "x")
         run(self.engine.on_tick("XAUUSD", 2000.0, 2000.4))
         self.assertEqual(self.sent, [])
+
+
+class BroadcastEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.AlertStore(":memory:")
+        self.sent = []
+        self.broadcast = []
+
+        async def notify(chat_id, text):
+            self.sent.append((chat_id, text))
+
+        async def broadcast(text):
+            self.broadcast.append(text)
+
+        self.engine = alerts.AlertEngine(self.store, notify, fmt.alert_fired,
+                                         on_broadcast=broadcast)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_broadcast_alert_goes_to_all_not_owner(self):
+        self.store.create(111, "XAUUSD", 2450.0, alerts.CROSSING_UP,
+                          "note", broadcast=True)
+        run(self.engine.on_tick("XAUUSD", 2450.0, 2450.4))
+        self.assertEqual(len(self.broadcast), 1)
+        self.assertEqual(self.sent, [])           # owner NOT notified
+        self.assertIn("2450", self.broadcast[0])
+        self.assertEqual(self.store.for_chat(111), [])   # deleted
+
+    def test_broadcast_failure_drops_alert(self):
+        # broadcast has no single owner to retry for; a failed broadcast is
+        # dropped (fire-and-forget) and the alert deleted.
+        self.store.create(111, "XAUUSD", 2450.0, alerts.CROSSING_UP,
+                          "note", broadcast=True)
+
+        async def broken_broadcast(text):
+            raise RuntimeError("telegram down")
+
+        engine = alerts.AlertEngine(self.store,
+                                    lambda c, t: None,
+                                    fmt.alert_fired,
+                                    on_broadcast=broken_broadcast)
+        run(engine.on_tick("XAUUSD", 2450.0, 2450.4))
+        self.assertEqual(self.store.for_chat(111), [])        # dropped
+
+
+class CandleBroadcastEngineTests(unittest.TestCase):
+    def setUp(self):
+        self.store = alerts.CandleAlertStore(":memory:")
+        self.sent = []
+        self.broadcast = []
+
+        async def notify(chat_id, text):
+            self.sent.append((chat_id, text))
+
+        async def broadcast(text):
+            self.broadcast.append(text)
+
+        self.engine = alerts.CandleAlertEngine(
+            self.store, notify, fmt.candle_alert_fired,
+            on_broadcast=broadcast)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_broadcast_candle_alert_goes_to_all_not_owner(self):
+        self.store.create(111, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "note", broadcast=True)
+        run(self.engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        self.assertEqual(len(self.broadcast), 1)
+        self.assertEqual(self.sent, [])                  # owner NOT notified
+        self.assertEqual(self.store.for_chat(111), [])   # deleted
+
+    def test_broadcast_failure_keeps_candle_alert(self):
+        self.store.create(111, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "note", broadcast=True)
+
+        async def broken_broadcast(text):
+            raise RuntimeError("telegram down")
+
+        engine = alerts.CandleAlertEngine(
+            self.store, lambda c, t: None, fmt.candle_alert_fired,
+            on_broadcast=broken_broadcast)
+        run(engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
 
 
 class DirectionInference(unittest.TestCase):
