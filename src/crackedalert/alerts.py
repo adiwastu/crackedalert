@@ -244,14 +244,17 @@ class AlertEngine:
                 continue
             log.info("alert %s fired: %s crossed %s (mid %.5f)",
                      alert.id, alert.symbol, alert.target, mid)
-            if alert.broadcast:
-                await self._fire_broadcast(alert)
-            elif alert.kind == KIND_MANUAL:
-                await self._fire_manual(alert)
-            elif alert.kind == KIND_ENTRY:
+            if alert.kind == KIND_ENTRY:
+                # entry alerts confirm the position (and create TP/SL auto
+                # alerts) before broadcasting; a --all entry alert still
+                # goes through confirm, then _fire_entry broadcasts.
                 await self._fire_entry(alert)
-            else:  # KIND_TP / KIND_SL
+            elif alert.kind in (KIND_TP, KIND_SL):
                 await self._fire_auto(alert)
+            elif alert.broadcast:
+                await self._fire_broadcast(alert)
+            else:  # KIND_MANUAL
+                await self._fire_manual(alert)
 
     async def _fire_manual(self, alert: Alert) -> None:
         try:

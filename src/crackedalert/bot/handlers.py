@@ -53,6 +53,7 @@ class TradeArgs:
     risk_usd: Optional[float] = None   # dollar amount, $ prefix; else pct
     cc_timeframe: Optional[str] = None   # e.g. "M15"; None = no guard
     cc_price: Optional[float] = None
+    broadcast: bool = False
 
 
 def parse_alert(text: str, default_symbol: str,
@@ -89,9 +90,10 @@ def parse_alert(text: str, default_symbol: str,
 
 
 def parse_trade(text: str, is_market: bool) -> TradeArgs:
-    """/m <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>]
-       /p <entry> <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>]"""
+    """/m <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>] [--all]
+       /p <entry> <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>] [--all]"""
     tokens = text.split()[1:]
+    broadcast = _pop_broadcast(tokens)
     base = 5 if is_market else 6
     if len(tokens) not in (base, base + 2):
         raise ParseError(
@@ -150,7 +152,8 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
     return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
                      rr=rr, risk_pct=risk_pct, account=account,
                      risk_usd=risk_usd,
-                     cc_timeframe=cc_timeframe, cc_price=cc_price)
+                     cc_timeframe=cc_timeframe, cc_price=cc_price,
+                     broadcast=broadcast)
 
 
 def _is_number(token: str) -> bool:
@@ -646,7 +649,8 @@ class Handlers:
 
         if is_market:
             self._create_entry_alert(update, plan, symbol.name, result,
-                                     args.account)
+                                     args.account,
+                                     broadcast=args.broadcast)
             if args.cc_timeframe and args.cc_price is not None:
                 if self._candle_store is not None and self._candle_feed is not None:
                     await self._attach_cc_guard(update, plan, args, result)
@@ -658,13 +662,15 @@ class Handlers:
             self._create_entry_alert(update, plan, symbol.name, result,
                                      args.account,
                                      cc_timeframe=args.cc_timeframe,
-                                     cc_price=args.cc_price)
+                                     cc_price=args.cc_price,
+                                     broadcast=args.broadcast)
             if args.cc_timeframe:
                 await self._reply(update, fmt.cc_guard_pending(args.cc_timeframe, args.cc_price))
 
     def _create_entry_alert(self, update: Update, plan, symbol_name: str,
                             result, account: str,
-                            cc_timeframe=None, cc_price=None) -> None:
+                            cc_timeframe=None, cc_price=None,
+                            broadcast=False) -> None:
         """Create an 'entry' auto-alert for a just-placed order. The engine
         fires it when the entry is hit, confirms the position, then creates
         TP/SL alerts broadcast to all subscribers."""
@@ -677,7 +683,8 @@ class Handlers:
             kind=alerts_mod.KIND_ENTRY, trade_id=trade_id,
             account=account,
             cc_timeframe=cc_timeframe or "",
-            cc_price=cc_price or 0.0)
+            cc_price=cc_price or 0.0,
+            broadcast=broadcast)
         log.info("auto entry alert %s created: %s %s trade=%s",
                  alert.id, alert.symbol, alert.target, trade_id)
 

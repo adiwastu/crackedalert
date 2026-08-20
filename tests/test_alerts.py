@@ -372,6 +372,21 @@ class AutoAlertEngineTests(unittest.TestCase):
         kinds = {r.kind for r in rows}
         self.assertEqual(kinds, {alerts.KIND_TP, alerts.KIND_SL})
 
+    def test_broadcast_entry_confirms_then_broadcasts(self):
+        # regression: broadcast flag must NOT shadow the entry path. A --all
+        # entry alert still goes through on_entry_hit (confirm + create TP/SL)
+        # before the entry hit is broadcast to every subscriber.
+        self.store.create(111, "XAUUSD", 2450.0,
+                          alerts.CROSSING_UP, "entry",
+                          kind=alerts.KIND_ENTRY, trade_id="9",
+                          account="live", broadcast=True)
+        run(self.engine.on_tick("XAUUSD", 2450.0, 2450.4))   # mid 2450.2
+        self.assertEqual(len(self.entry_hits), 1)             # confirmed
+        self.assertEqual(len(self.broadcast), 1)              # then broadcast
+        rows = self.store.for_chat(111)
+        kinds = {r.kind for r in rows}
+        self.assertEqual(kinds, {alerts.KIND_TP, alerts.KIND_SL})
+
     def test_entry_not_confirmed_keeps_alert(self):
         store = alerts.AlertStore(":memory:")
         sent = []

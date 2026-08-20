@@ -168,12 +168,14 @@ async def _run_bot(settings: Settings) -> None:
             alert.chat_id, alert.symbol, float(tp),
             direction_for_side(side, "tp"),
             "auto TP hit for trade %s" % pos_id,
-            kind=KIND_TP, trade_id=pos_id, account=alert.account)
+            kind=KIND_TP, trade_id=pos_id, account=alert.account,
+            broadcast=alert.broadcast)
         store.create(
             alert.chat_id, alert.symbol, float(sl),
             direction_for_side(side, "sl"),
             "auto SL hit for trade %s" % pos_id,
-            kind=KIND_SL, trade_id=pos_id, account=alert.account)
+            kind=KIND_SL, trade_id=pos_id, account=alert.account,
+            broadcast=alert.broadcast)
 
         # CC guard for pending orders: guard params were stored on the entry alert
         if alert.cc_timeframe and alert.cc_price:
@@ -183,7 +185,7 @@ async def _run_bot(settings: Settings) -> None:
                 alert.cc_price, cc_direction,
                 "cc guard for position %s" % pos_id,
                 action="close", position_id=int(pos_id),
-                account=alert.account)
+                account=alert.account, broadcast=alert.broadcast)
             candle_feed.add_symbol(alert.symbol, alert.cc_timeframe)
             log.info("cc guard %s created on fill: pos=%s %s %s",
                      cc_guard.id, pos_id, alert.symbol, alert.cc_timeframe)

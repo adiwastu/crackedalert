@@ -85,6 +85,38 @@ class TradeParsing(unittest.TestCase):
             (t.sl, t.widen, t.rr, t.risk_pct, t.account),
             (2455.0, False, 3.0, 1.0, "5k"))
 
+    def test_market_broadcast_flag(self):
+        t = handlers.parse_trade("/m 2440.00 y 2 0.5 10k --all",
+                                 is_market=True)
+        self.assertTrue(t.broadcast)
+        self.assertEqual(
+            (t.sl, t.widen, t.rr, t.risk_pct, t.account),
+            (2440.0, True, 2.0, 0.5, "10k"))
+
+        b = handlers.parse_trade("/m 2440.00 y 2 0.5 10k -all",
+                                 is_market=True)
+        self.assertTrue(b.broadcast)
+
+    def test_pending_broadcast_flag(self):
+        t = handlers.parse_trade("/p 2450 2455 n 3 1 5k --all",
+                                 is_market=False)
+        self.assertTrue(t.broadcast)
+        self.assertEqual(t.entry, 2450.0)
+        self.assertEqual(
+            (t.sl, t.widen, t.rr, t.risk_pct, t.account),
+            (2455.0, False, 3.0, 1.0, "5k"))
+
+    def test_trade_broadcast_with_cc_guard(self):
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k M15 4080 --all",
+                                 is_market=True)
+        self.assertTrue(t.broadcast)
+        self.assertEqual(t.cc_timeframe, "M15")
+        self.assertEqual(t.cc_price, 4080.0)
+
+    def test_trade_no_broadcast_default(self):
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k", is_market=True)
+        self.assertFalse(t.broadcast)
+
     def test_wrong_arity(self):
         with self.assertRaises(handlers.ParseError):
             handlers.parse_trade("/m 2440.00 y 2 0.5", is_market=True)

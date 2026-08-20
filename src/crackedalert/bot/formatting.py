@@ -110,11 +110,11 @@ def cancel_usage() -> str:
 def trade_usage(is_market: bool) -> str:
     if is_market:
         return usage("/m",
-                     "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
-                     "/m 2440.00 y 2 0.5 10k M15 4080")
+                     "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard] [--all]",
+                     "/m 2440.00 y 2 0.5 10k M15 4080 --all")
     return usage("/p",
-                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
-                 "/p 2450.00 2455.00 n 3 1 5k H1 2445")
+                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard] [--all]",
+                 "/p 2450.00 2455.00 n 3 1 5k H1 2445 --all")
 
 
 def positions_usage(is_positions: bool) -> str:
@@ -198,10 +198,10 @@ def account_not_found(account: str) -> str:
 
 _HELP_SECTIONS = [
     ("execute", [
-        ("/m", "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
-         "/m 2440.00 y 2 0.5 10k M15 4080"),
-        ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
-         "/p 2450.00 2455.00 n 3 1 5k H1 2445"),
+         ("/m", "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
+          "add --all to broadcast"),
+         ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
+          "add --all to broadcast"),
     ]),
     ("manage", [
         ("/be", "[account]", "move SL to breakeven + spread"),
