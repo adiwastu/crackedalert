@@ -1,4 +1,4 @@
-alert.hotland3x3.my.id {
+YOUR_DOMAIN {
 	root * /var/www/crackedalert-ui
 	redir / /ui.html 302
 	file_server
