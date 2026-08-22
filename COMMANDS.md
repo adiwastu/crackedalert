@@ -478,7 +478,7 @@ Deletes a candle-close alert owned by the calling chat.
 
 ### `/help` — Show Help
 
-Shows the full command list with examples and account balances.
+Shows the command-builder UI link and the Android alarm-app APK download.
 
 **Syntax:**
 ```
@@ -491,8 +491,8 @@ Shows the full command list with examples and account balances.
 ```
 
 **Behavior:**
-- Shows all commands grouped by category (execute, manage, alerts, info).
-- Shows each configured account shortcode with its live balance (if fetchable).
+- Replies with the frontend UI link (`alert.hotland3x3.my.id/ui.html`).
+- Replies with the Android app APK download link (GitHub raw).
 
 ---
 

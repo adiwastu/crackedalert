@@ -8,11 +8,11 @@ spans, and emoji side-glyphs. Function signatures are unchanged.
 """
 
 from html import escape as _html_escape
-from typing import Iterable, List, Optional
+from typing import List, Optional
 
 from ..alerts import (CANDLE_ABOVE, CANDLE_BELOW, CROSSING_UP, Alert,
                       CandleAlert, KIND_ENTRY, KIND_SL, KIND_TP)
-from .. import version as bot_version
+
 
 
 # --------------------------------------------------------------------------
@@ -196,65 +196,18 @@ def account_not_found(account: str) -> str:
 # help
 # --------------------------------------------------------------------------
 
-_HELP_SECTIONS = [
-    ("execute", [
-         ("/m", "[sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price>] [tf guard]",
-          "--smart-sl places the stop exactly; risk at it = risk% scaled"),
-         ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price>] [tf guard]",
-          "--smart-sl places the stop exactly; risk at it = risk% scaled"),
-    ]),
-    ("manage", [
-        ("/be", "[account]", "move SL to breakeven + spread"),
-        ("/close", "[id] [account]", "closes one position"),
-        ("/close_all", "[account]", "closes all positions"),
-        ("/cancel_order", "[id] [account]", "cancels one pending order"),
-    ]),
-    ("alerts", [
-        ("/alert", "[target] [notes]", "add --all to broadcast"),
-        ("/ccalert", "[tf] [price] [above|below] [symbol] [notes]",
-         "add --all to broadcast"),
-        ("/list", "", "active alerts"),
-        ("/cancel", "[id]", "delete alert"),
-        ("/cclist", "", "active candle alerts"),
-        ("/cccancel", "[id]", "delete candle alert"),
-    ]),
-    ("info", [
-        ("/orders", "[account]", "working orders"),
-        ("/positions", "[account]", "open positions"),
-    ]),
-]
 
-
-def help_text(account_codes: Iterable[str],
-              balances: Optional[dict] = None) -> str:
-    codes = list(account_codes)
-    lines = ["<b>cracked alert</b>", ""]
-
-    for title, cmds in _HELP_SECTIONS:
-        body = []
-        for cmd, args, note in cmds:
-            head = "<code>%s %s</code>" % (esc(cmd), esc(args)) if args \
-                else "<code>%s</code>" % esc(cmd)
-            body.append(head)
-            if note:
-                body.append("   <i>%s</i>" % esc(note))
-        lines.append("<b>%s</b>" % esc(title))
-        lines.append("<blockquote expandable>%s</blockquote>"
-                     % "\n".join(body))
-        lines.append("")
-
-    lines.append("<b>accounts</b>")
-    acct_lines = []
-    for code in codes:
-        if balances and balances.get(code) is not None:
-            acct_lines.append("<code>%s</code>  %s" % (
-                esc(code), esc(_trim(balances[code]))))
-        else:
-            acct_lines.append("<code>%s</code>" % esc(code))
-    lines.append("\n".join(acct_lines))
-    lines.append("")
-    lines.append("<i>%s</i>" % esc(bot_version()))
-    return "\n".join(lines)
+def help_text() -> str:
+    """/help reply: just the command-builder UI and the alarm-app APK."""
+    return "\n".join([
+        "<b>cracked alert</b>",
+        "",
+        "UI: <a href=\"https://alert.hotland3x3.my.id/ui.html\">"
+        "alert.hotland3x3.my.id/ui.html</a>",
+        "Android app (APK): <a href=\"https://github.com/adiwastu/"
+        "crackedalert/raw/main/android/CrackedAlarm-debug.apk\">"
+        "CrackedAlarm-debug.apk</a>",
+    ])
 
 
 # --------------------------------------------------------------------------

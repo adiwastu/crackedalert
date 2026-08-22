@@ -60,47 +60,20 @@ class EscapingTests(unittest.TestCase):
 
 
 class HelpTextTests(unittest.TestCase):
-    """help_text is now expandable blockquotes per section."""
+    """help_text now returns just the UI + APK links."""
 
-    def test_help_text_accounts_each_on_own_line(self):
-        text = fmt.help_text(["5k", "10k", "raven", "demo"])
-        self.assertIn("<code>5k</code>", text)
-        self.assertIn("<code>10k</code>", text)
-        self.assertIn("<code>raven</code>", text)
-        self.assertIn("<code>demo</code>", text)
+    def test_help_text_has_ui_link(self):
+        text = fmt.help_text()
+        self.assertIn("alert.hotland3x3.my.id", text)
 
-    def test_help_text_single_account(self):
-        text = fmt.help_text(["live"])
-        self.assertIn("<code>live</code>", text)
+    def test_help_text_has_apk_link(self):
+        text = fmt.help_text()
+        self.assertIn("CrackedAlarm-debug.apk", text)
 
-    def test_help_text_with_balances(self):
-        text = fmt.help_text(
-            ["5k", "demo"],
-            balances={"5k": 1234.5, "demo": 1001113.25})
-        self.assertIn("<code>5k</code>  1234.5", text)
-        self.assertIn("<code>demo</code>  1001113.25", text)
-
-    def test_help_text_balance_failure_shows_question_mark(self):
-        text = fmt.help_text(
-            ["5k", "demo"],
-            balances={"5k": None, "demo": 100.0})
-        self.assertIn("<code>5k</code>", text)
-        self.assertIn("<code>demo</code>  100", text)
-
-    def test_help_text_no_balances_no_values(self):
-        text = fmt.help_text(["5k"])
-        self.assertIn("<code>5k</code>", text)
-        self.assertNotIn("<code>5k</code>  ", text)
-
-    def test_help_text_has_blockquote_expandable(self):
-        text = fmt.help_text(["demo"])
-        self.assertIn("<blockquote expandable>", text)
-        self.assertIn("</blockquote>", text)
-
-    def test_help_text_has_version(self):
-        text = fmt.help_text(["demo"])
-        self.assertIn("<i>v2.", text)
-        self.assertIn("</i>", text)
+    def test_help_text_no_command_sections(self):
+        text = fmt.help_text()
+        self.assertNotIn("<code>", text)
+        self.assertNotIn("<blockquote", text)
 
 
 class AlertFiredTests(unittest.TestCase):

@@ -390,16 +390,7 @@ class Handlers:
                     _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return
-        balances = {}
-        if self._trader is not None:
-            for shortcode in self._settings.accounts:
-                try:
-                    balances[shortcode] = await self._trader.balance(
-                        shortcode)
-                except (TradeRejected, CTraderError, Exception):
-                    balances[shortcode] = None
-        await self._reply(
-            update, fmt.help_text(self._settings.accounts.keys(), balances))
+        await self._reply(update, fmt.help_text())
 
     async def orders(self, update: Update,
                      _ctx: ContextTypes.DEFAULT_TYPE) -> None:
