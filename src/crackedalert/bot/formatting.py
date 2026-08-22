@@ -281,16 +281,17 @@ def order_success(ticket, symbol: str, direction: str, kind_label: str,
         sl_text = "%s%s" % (sl_text, esc(widen_label))
 
     # Smart SL (exact price): the stop is placed at the requested price and
-    # the exposure there is risk_usd * smart_dist/dist. Show it as a % of
-    # balance (pct mode) or in dollars (dollar-risk mode).
+    # the exposure there is risk_usd * smart_dist/dist. Show it in dollars
+    # when dollar-risk mode is on, otherwise as a % of balance (pct mode).
     smart_text = ""
     if smart_sl is not None:
-        if smart_risk_pct is not None:
+        if dollar_risk:
+            if smart_risk_usd is not None:
+                smart_text = "\u00b7 risk at smart SL <code>%.*f</code> = <code>$%.2f</code>" % (
+                    digits, smart_sl, smart_risk_usd)
+        elif smart_risk_pct is not None:
             smart_text = "\u00b7 risk at smart SL <code>%.*f</code> = %s%%" % (
                 digits, smart_sl, esc(_trim(smart_risk_pct)))
-        elif smart_risk_usd is not None:
-            smart_text = "\u00b7 risk at smart SL <code>%.*f</code> = <code>$%.2f</code>" % (
-                digits, smart_sl, smart_risk_usd)
 
     lines = [
         "\u2705 %s <b>%s %s</b> \u00b7 %s \u00b7 %s" % (

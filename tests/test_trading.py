@@ -305,7 +305,6 @@ class TradingServiceTests(unittest.TestCase):
             run(self.service.execute(args, True, risk_usd=args.risk_usd))
         self.assertIn("smart SL", str(cm.exception))
 
-
     def test_dollar_risk_executes_exact_amount(self):
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
                          risk_pct=0.0, account="demo", risk_usd=50.0)
