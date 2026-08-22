@@ -10,3 +10,11 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+
+# android app
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
