@@ -53,6 +53,7 @@ class TradeArgs:
     risk_usd: Optional[float] = None   # dollar amount, $ prefix; else pct
     cc_timeframe: Optional[str] = None   # e.g. "M15"; None = no guard
     cc_price: Optional[float] = None
+    mult: float = 1.0          # smart-SL lot multiplier (trailing x2), 1 = off
     broadcast: bool = False
 
 
@@ -89,16 +90,24 @@ def parse_alert(text: str, default_symbol: str,
                      broadcast=broadcast)
 
 
+MULT_RE = re.compile(r"^x(\d+(?:\.\d+)?)$")
+
+
 def parse_trade(text: str, is_market: bool) -> TradeArgs:
-    """/m <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>] [--all]
-       /p <entry> <sl> <widen> <rr> <risk%> <account> [<tf> <guard_price>] [--all]"""
+    """/m <sl> <widen> <rr> <risk%> <account> [x<mult>] [<tf> <guard_price>] [--all]
+       /p <entry> <sl> <widen> <rr> <risk%> <account> [x<mult>] [<tf> <guard_price>] [--all]
+    <mult> (smart SL) tightens the stop to entry -/+ dist/mult, sizing
+    mult x the lots for the same dollar risk. A trailing x<mult> must sit
+    right after the account (before the optional CC guard pair / --all).
+    """
     tokens = text.split()[1:]
     broadcast = _pop_broadcast(tokens)
     base = 5 if is_market else 6
-    if len(tokens) not in (base, base + 2):
+    if len(tokens) not in (base, base + 1, base + 2, base + 3):
         raise ParseError(
-            "expected %d arguments (or %d with CC guard), got %d"
-            % (base, base + 2, len(tokens)))
+            "expected %d arguments (or %d with x-mult / %d with CC guard "
+            "/ %d with both), got %d"
+            % (base, base + 1, base + 2, base + 3, len(tokens)))
     try:
         if is_market:
             entry = None
@@ -135,23 +144,35 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
     if risk_usd is not None and risk_usd <= 0:
         raise ParseError("risk amount must be positive")
 
+    # Optional smart-SL multiplier: x2 / x2.5 straight after the account.
+    mult = 1.0
+    next_idx = base
+    if next_idx < len(tokens) and MULT_RE.match(tokens[next_idx]):
+        mult = float(MULT_RE.match(tokens[next_idx]).group(1))
+        if mult < 1.0:
+            raise ParseError("x-mult must be >= 1")
+        next_idx += 1
+
     # CC guard (optional)
     cc_timeframe = None
     cc_price = None
-    if len(tokens) == base + 2:
-        cc_timeframe = tokens[base].upper()
+    rest = tokens[next_idx:]
+    if rest:
+        if len(rest) != 2:
+            raise ParseError("expected optional CC guard as a tf+price pair")
+        cc_timeframe = rest[0].upper()
         if cc_timeframe not in candles_mod.TIMEFRAMES:
             raise ParseError(
                 "cc guard timeframe '%s' is not valid. Use: %s"
                 % (cc_timeframe, " ".join(candles_mod.TIMEFRAMES)))
         try:
-            cc_price = float(tokens[base + 1])
+            cc_price = float(rest[1])
         except ValueError:
             raise ParseError("cc guard price is not a number")
 
     return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
                      rr=rr, risk_pct=risk_pct, account=account,
-                     risk_usd=risk_usd,
+                     risk_usd=risk_usd, mult=mult,
                      cc_timeframe=cc_timeframe, cc_price=cc_price,
                      broadcast=broadcast)
 
@@ -645,12 +666,18 @@ class Handlers:
             risk_usd=plan.risk_usd, entry_label=entry_label,
             sl=plan.sl, tp=plan.tp, rr=args.rr,
             widen_label=plan.widen_label, digits=symbol.digits,
-            dollar_risk=args.risk_usd is not None))
+            dollar_risk=args.risk_usd is not None,
+            sl_label=plan.sl_label))
 
         if is_market:
-            self._create_entry_alert(update, plan, symbol.name, result,
-                                     args.account,
-                                     broadcast=args.broadcast)
+            # Market fills are already in: the engine's entry alert would
+            # never fire on MID (entry = ask for BUY / bid for SELL), so
+            # skip it and create the TP/SL alerts for the open position now.
+            trade_id = str(result.position_id or result.order_id) \
+                if (result.position_id or result.order_id) else ""
+            self._create_tp_sl_alerts(update, plan, symbol.name, trade_id,
+                                      args.account,
+                                      broadcast=args.broadcast)
             if args.cc_timeframe and args.cc_price is not None:
                 if self._candle_store is not None and self._candle_feed is not None:
                     await self._attach_cc_guard(update, plan, args, result)
@@ -674,7 +701,9 @@ class Handlers:
         """Create an 'entry' auto-alert for a just-placed order. The engine
         fires it when the entry is hit, confirms the position, then creates
         TP/SL alerts broadcast to all subscribers."""
-        trade_id = str(result.order_id) if result.order_id is not None else ""
+        trade_id = str(result.position_id or result.order_id)
+        if not trade_id or trade_id == "0":
+            trade_id = ""
         direction = alerts_mod.direction_for_side(plan.direction, "entry")
         target = plan.placement_price if plan.placement_price is not None else plan.entry_ref
         alert = self._store.create(
@@ -688,21 +717,53 @@ class Handlers:
         log.info("auto entry alert %s created: %s %s trade=%s",
                  alert.id, alert.symbol, alert.target, trade_id)
 
+    def _create_tp_sl_alerts(self, update: Update, plan, symbol_name: str,
+                             trade_id: str, account: str,
+                             broadcast=False) -> None:
+        """Create TP and SL auto-alerts for an already-open position
+        (market orders). Mirrors the engine's on_entry_hit flow so the
+        alert chain is identical whether the fill is instant (market) or
+        happens later on a pending entry."""
+        if not trade_id:
+            log.warning("tp/sl alerts skipped: no trade id for %s %s",
+                        plan.direction, symbol_name)
+            return
+        tp = alerts_mod.direction_for_side(plan.direction, "tp")
+        sl = alerts_mod.direction_for_side(plan.direction, "sl")
+        self._store.create(
+            update.effective_chat.id, symbol_name, plan.tp, tp,
+            "auto TP hit for trade %s" % trade_id,
+            kind=alerts_mod.KIND_TP, trade_id=trade_id,
+            account=account, broadcast=broadcast)
+        self._store.create(
+            update.effective_chat.id, symbol_name, plan.sl, sl,
+            "auto SL hit for trade %s" % trade_id,
+            kind=alerts_mod.KIND_SL, trade_id=trade_id,
+            account=account, broadcast=broadcast)
+        log.info("auto TP/SL alerts %s/%s created for %s %s trade=%s",
+                 tp, sl, plan.direction, symbol_name, trade_id)
+
     async def _attach_cc_guard(self, update: Update, plan,
                                args: TradeArgs, result) -> None:
         """Create the CC guard for a market order right after confirming the
         position exists."""
-        try:
-            position = await self._trader.confirm_position(
-                args.account, self._symbol, plan.direction,
-                plan.entry_ref,
-                str(result.order_id) if result.order_id else "")
-        except Exception:
-            log.exception("cc guard: confirm_position failed for %s", args.account)
-            await self._reply(update,
-                "trade placed, but cc guard could not be set "
-                "(position confirm failed \u2014 use /ccalert manually).")
-            return
+        # Fast path: the fill's positionId is already known (ExecutionEvent).
+        position = None
+        if result.position is not None and result.position_id:
+            position = result.position
+            position["positionId"] = result.position_id
+        if position is None:
+            try:
+                position = await self._trader.confirm_position(
+                    args.account, self._symbol, plan.direction,
+                    plan.entry_ref,
+                    str(result.order_id) if result.order_id else "")
+            except Exception:
+                log.exception("cc guard: confirm_position failed for %s", args.account)
+                await self._reply(update,
+                    "trade placed, but cc guard could not be set "
+                    "(position confirm failed \u2014 use /ccalert manually).")
+                return
 
         if position is None:
             await self._reply(update,

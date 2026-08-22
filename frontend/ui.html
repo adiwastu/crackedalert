@@ -771,12 +771,24 @@ body {
         </div>
       </div>
 
+      <!-- Lot multiplier -->
+      <div class="step-wrap">
+        <div class="fld__label">Lot multiplier</div>
+        <span class="fld__hint">Smart SL in-between · x1 = off</span>
+        <div class="step">
+          <button class="step__btn" onclick="adj('mult',-1)" aria-label="Decrease multiplier">−</button>
+          <div class="step__val" id="mult-disp">×1</div>
+          <button class="step__btn" onclick="adj('mult',1)"   aria-label="Increase multiplier">+</button>
+        </div>
+      </div>
+
       <!-- Calc preview -->
       <div class="calc mt16">
         <div class="calc__head">Calculated</div>
         <div class="calc__row"><span class="calc__key">Risk $</span><span class="calc__val" id="c-risk">—</span></div>
         <div class="calc__row"><span class="calc__key">Lot size</span><span class="calc__val" id="c-lot">—</span></div>
         <div class="calc__row"><span class="calc__key">Take profit</span><span class="calc__val" id="c-tp">—</span></div>
+        <div class="calc__row"><span class="calc__key">SL level</span><span class="calc__val" id="c-sl">—</span></div>
         <div class="calc__row"><span class="calc__key">Account</span><span class="calc__val" id="c-acct">live100k · $99,867.87</span></div>
       </div>
 
@@ -906,6 +918,7 @@ const S = {
   widen: false,
   rr: 2,
   risk: 0.5,
+  mult: 1,
   alertType: 'price',
   priceBroadcast: false,
   candleBroadcast: false
@@ -984,6 +997,9 @@ function adj(key, delta) {
   if (key === 'rr') {
     S.rr = Math.max(0.5, Math.round((S.rr + delta) * 2) / 2);
     document.getElementById('rr-disp').textContent = '1 : ' + S.rr;
+  } else if (key === 'mult') {
+    S.mult = Math.min(4, Math.max(1, S.mult + delta));
+    document.getElementById('mult-disp').textContent = '×' + S.mult;
   } else {
     S.risk = Math.max(0.25, Math.round((S.risk + delta) * 4) / 4);
     document.getElementById('risk-disp').textContent = S.risk.toFixed(2) + '%';
@@ -1003,15 +1019,24 @@ function recalc() {
   document.getElementById('c-risk').textContent = '$' + riskUsd.toFixed(2);
   document.getElementById('c-acct').textContent = info.label + ' · $' + info.bal.toLocaleString('en-US', {minimumFractionDigits:2});
 
+  // The bot's multipler (x2..x4) tightens the stop from the far SL toward
+  // the entry (dist / mult) and multiplies lot size by the same factor,
+  // keeping the dollar risk identical. The calc mirrors that math.
+  const mult = S.mult > 1 ? S.mult : 1;
+
   if (slDist && slDist > 0) {
     const adjSl = slDist * (S.widen ? 1.1 : 1);
-    const lot   = (riskUsd / (adjSl * 10)).toFixed(2);
+    const dist  = adjSl / mult;
+    const effSl = entry < slRaw ? entry + dist : entry - dist;
+    const lot   = (riskUsd / (adjSl * 10) * mult).toFixed(2);
     const tp    = (entry + slDist * S.rr).toFixed(2);
     document.getElementById('c-lot').textContent = lot;
     document.getElementById('c-tp').textContent  = tp;
+    document.getElementById('c-sl').textContent  = effSl.toFixed(2);
   } else {
     document.getElementById('c-lot').textContent = '—';
     document.getElementById('c-tp').textContent  = S.orderType === 'market' ? 'needs live price' : '—';
+    document.getElementById('c-sl').textContent  = '—';
   }
   updateTradeCmd();
 }
@@ -1029,6 +1054,11 @@ function execOrder() {
     if (!entry) { document.getElementById('inp-entry').focus(); return; }
     cmd = `/p ${parseFloat(entry).toFixed(2)} ${parseFloat(sl).toFixed(2)} ${widen} ${S.rr} ${S.risk} ${acct}`;
   }
+
+  if (S.mult > 1) {
+    cmd += ` x${S.mult}`;
+  }
+
   run(cmd, 'trade-banner');
 }
 
@@ -1106,6 +1136,11 @@ function updateTradeCmd() {
       widen, S.rr, S.risk, acct
     ];
   }
+
+  if (S.mult > 1) {
+    parts.push('x' + S.mult);
+  }
+
   setHdr(parts.join(' '));
 }
 

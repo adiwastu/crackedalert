@@ -12,7 +12,9 @@ robust check is string-level assertions on the relevant JS.
 import unittest
 from pathlib import Path
 
-UI_PATH = Path(__file__).resolve().parent.parent / "frontend" / "ui.html"
+ROOT = Path(__file__).resolve().parent.parent
+UI_PATH = ROOT / "frontend" / "ui.html"
+BUILDER_PATH = ROOT / "command_builder.html"
 
 
 class FrontendContractTest(unittest.TestCase):
@@ -48,6 +50,22 @@ class FrontendContractTest(unittest.TestCase):
         # The "Will copy" previews must reflect the toggle too.
         self.assertIn("${S.priceBroadcast ? ' --all' : ''}", self.ui)
         self.assertIn("${S.candleBroadcast ? ' --all' : ''}", self.ui)
+
+    def test_mult_control_present_in_ui(self) -> None:
+        # Bug 3: the UI must expose the "Smart SL in-between" multiplier
+        # so traders can emit x2..x4 on /m and /p.
+        self.assertIn("Lot multiplier", self.ui)
+        self.assertIn("adj('mult'", self.ui)
+        self.assertIn("S.mult > 1", self.ui)
+        self.assertIn("'x' + S.mult", self.ui)
+
+    def test_mult_control_present_in_builder(self) -> None:
+        builder = BUILDER_PATH.read_text(encoding="utf-8")
+        self.assertIn("Lot multiplier", builder)
+        self.assertIn("adj('mult'", builder)
+        self.assertIn("S.mult > 1", builder)
+        self.assertIn("parts.push('x' + S.mult)", builder)
+        self.assertIn("cmd += ` x${S.mult}`", builder)
 
 
 if __name__ == "__main__":

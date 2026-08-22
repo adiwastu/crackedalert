@@ -7,6 +7,8 @@ P1: Templates rewritten for expandable blockquotes, tap-to-copy <code>
 spans, and emoji side-glyphs. Function signatures are unchanged.
 """
 
+import re
+
 from html import escape as _html_escape
 from typing import Iterable, List, Optional
 
@@ -110,11 +112,11 @@ def cancel_usage() -> str:
 def trade_usage(is_market: bool) -> str:
     if is_market:
         return usage("/m",
-                     "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard] [--all]",
-                     "/m 2440.00 y 2 0.5 10k M15 4080 --all")
+                     "[sl] [widen:y/n] [rr] [risk%] [account] [x2] [tf guard] [--all]",
+                     "/m 2440.00 y 2 0.5 10k x2 M15 4080 --all")
     return usage("/p",
-                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard] [--all]",
-                 "/p 2450.00 2455.00 n 3 1 5k H1 2445 --all")
+                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [x2] [tf guard] [--all]",
+                 "/p 2450.00 2455.00 n 3 1 5k x2 H1 2445 --all")
 
 
 def positions_usage(is_positions: bool) -> str:
@@ -198,10 +200,10 @@ def account_not_found(account: str) -> str:
 
 _HELP_SECTIONS = [
     ("execute", [
-         ("/m", "[sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
-          "add --all to broadcast"),
-         ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [tf guard]",
-          "add --all to broadcast"),
+         ("/m", "[sl] [widen:y/n] [rr] [risk%] [account] [x2] [tf guard]",
+          "x2 = 2x lots at half the SL distance"),
+         ("/p", "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [x2] [tf guard]",
+          "x2 = 2x lots at half the SL distance"),
     ]),
     ("manage", [
         ("/be", "[account]", "move SL to breakeven + spread"),
@@ -265,7 +267,8 @@ def order_success(ticket, symbol: str, direction: str, kind_label: str,
                   account: str, lots: float, risk_pct: float, risk_usd: float,
                   entry_label: str, sl: float, tp: float, rr: float,
                   widen_label: str, digits: int = 2,
-                  dollar_risk: bool = False) -> str:
+                  dollar_risk: bool = False,
+                  sl_label: str = "") -> str:
 
     if dollar_risk:
         risk_text = "<code>$%.2f</code> risk = %s%%" % (
@@ -277,6 +280,12 @@ def order_success(ticket, symbol: str, direction: str, kind_label: str,
     sl_text = "%.*f" % (digits, sl)
     if widen_label:
         sl_text = "%s%s" % (sl_text, esc(widen_label))
+    if sl_label:
+        sl_text = "%s%s" % (sl_text, esc(sl_label))
+
+    # Smart SL (x<mult>) multiplies the effective RR: same TP, tighter stop.
+    margined_rr = rr * _mult_from_label(sl_label) if sl_label else rr
+    rr_text = ("%.2f" % margined_rr) if sl_label else _trim(rr)
 
     return "\n".join([
         "\u2705 %s <b>%s %s</b> \u00b7 %s \u00b7 %s" % (
@@ -287,7 +296,7 @@ def order_success(ticket, symbol: str, direction: str, kind_label: str,
         "SL <code>%s</code> \u00b7 TP <code>%.*f</code>" % (
             sl_text, digits, tp),
         "<code>%.2f</code> lots \u00b7 %s \u00b7 RR 1:%s" % (
-            lots, risk_text, esc(_trim(rr))),
+            lots, risk_text, esc(rr_text)),
         "",
         "<i>ticket #%s</i>" % esc(ticket if ticket is not None else "?"),
     ])
@@ -505,6 +514,14 @@ def cc_guard_position_gone(alert: CandleAlert) -> str:
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
+
+def _mult_from_label(sl_label: str) -> float:
+    """Parse the smart-SL multiplier back out of a label like ' (x2.5)'."""
+    m = re.search(r"x(\d+(?:\.\d+)?)", sl_label)
+    if not m:
+        return 1.0
+    return float(m.group(1))
+
 
 def _trim(value: float) -> str:
     """Render 2450.0 as the user typed it: no trailing zeros beyond 2dp."""

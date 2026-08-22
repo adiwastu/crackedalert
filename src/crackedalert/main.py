@@ -143,6 +143,24 @@ async def _run_bot(settings: Settings) -> None:
 
     trader = TradingService(clients, markets, settings)
 
+    def on_execution(payload: dict) -> None:
+        """Map pending-order fills (orderId -> positionId) as they arrive on
+        the execution-event stream. confirm_position needs this to turn an
+        entry alert's orderId into the filled position."""
+        order = payload.get("order") or {}
+        position = payload.get("position") or {}
+        order_id = order.get("orderId")
+        position_id = position.get("positionId")
+        if position_id is None:
+            position_id = order.get("positionId")
+        if order_id is not None and position_id is not None:
+            trader.note_fill(order_id, position_id)
+            log.info("execution fill: order %s -> position %s",
+                     order_id, position_id)
+
+    for _env, cli in clients.items():
+        cli.add_event_handler(ct.PT_EXECUTION_EVENT, on_execution)
+
     async def broadcast(text: str) -> None:
         """Send a message to every subscriber (auto trade alerts)."""
         for cid in subscription_store.all_ids():

@@ -87,6 +87,7 @@ class FakeClient:
         self.closes = []
         self.amends = []
         self.cancels = []
+        self.reconcile_queue = []      # optional per-call payloads (retry sim)
         self.reconcile_payload = {
             "position": [
                 {"positionId": 1,
@@ -117,6 +118,8 @@ class FakeClient:
                 "executionType": "ORDER_ACCEPTED",
                 "order": {"orderId": 555}}
         if payload_type == ct.PT_RECONCILE_REQ:
+            if self.reconcile_queue:
+                return ct.PT_RECONCILE_RES, self.reconcile_queue.pop(0)
             return ct.PT_RECONCILE_RES, self.reconcile_payload
         if payload_type == ct.PT_CLOSE_POSITION_REQ:
             self.closes.append(payload)
@@ -143,6 +146,13 @@ class FakeMarket:
 
     async def ensure_quote(self, account_id, symbol_name):
         return XAU, self._quote
+
+    async def ensure_symbol(self, account_id, symbol_name):
+        info = self._symbols.get(account_id, {}).get(symbol_name.upper())
+        if info is None:
+            raise ct.CTraderError("SYMBOL_NOT_FOUND",
+                                  "symbol '%s' not found" % symbol_name)
+        return info
 
     def symbol_name(self, account_id, symbol_id):
         for name, info in self._symbols.get(account_id, {}).items():
@@ -330,6 +340,55 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["positionId"], 1)
         self.assertAlmostEqual(sent["stopLoss"], 2450.2)
         self.assertNotIn("takeProfit", sent)   # TP preserved (not sent)
+
+
+class ConfirmPositionTests(unittest.TestCase):
+    """Bug 1: confirm_position must map orderId -> positionId (fill map),
+    retry the reconcile, and match entry by a digits-derived tolerance."""
+
+    def setUp(self):
+        self.cli = FakeClient()
+        self.quote = Quote(bid=2449.8, ask=2450.0,
+                           updated_at=time.monotonic())
+        self.service = trading.TradingService(
+            clients={"demo": self.cli},
+            markets={"demo": FakeMarket(self.quote)},
+            settings=make_settings())
+
+    def test_maps_order_id_to_position_id(self):
+        self.service.note_fill(555, 1)
+        pos = run(self.service.confirm_position(
+            "demo", "XAUUSD", "BUY", 2450.0, "555"))
+        self.assertIsNotNone(pos)
+        self.assertEqual(pos["positionId"], 1)
+
+    def test_retries_reconcile_before_giving_up(self):
+        self.cli.reconcile_queue = [
+            {"position": [], "order": []},
+            self.cli.reconcile_payload,
+        ]
+        pos = run(self.service.confirm_position(
+            "demo", "XAUUSD", "BUY", 2450.0, ""))
+        self.assertIsNotNone(pos)
+        self.assertEqual(pos["positionId"], 1)
+
+    def test_returns_none_after_all_retries(self):
+        self.cli.reconcile_queue = [
+            {"position": [], "order": []}] * 3
+        pos = run(self.service.confirm_position(
+            "demo", "XAUUSD", "BUY", 2450.0, ""))
+        self.assertIsNone(pos)
+
+    def test_matches_entry_within_digits_tolerance(self):
+        # digits=2 tolerance ~1.1 for gold; entry 2450.5 matches 2450.0.
+        pos = run(self.service.confirm_position(
+            "demo", "XAUUSD", "BUY", 2450.5, ""))
+        self.assertIsNotNone(pos)
+
+    def test_no_match_when_entry_too_far(self):
+        pos = run(self.service.confirm_position(
+            "demo", "XAUUSD", "BUY", 2452.0, ""))
+        self.assertIsNone(pos)
 
 
 class SuccessMessageFormat(unittest.TestCase):

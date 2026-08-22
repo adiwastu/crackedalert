@@ -6,7 +6,9 @@ import tempfile
 import unittest
 
 from crackedalert import alerts
+from crackedalert import risk
 from crackedalert.bot import formatting as fmt
+from crackedalert.bot import handlers
 
 
 def run(coro):
@@ -701,6 +703,62 @@ class AlertStoreGuardFieldTests(unittest.TestCase):
             self.assertEqual(rows[0].cc_timeframe, "")
             self.assertEqual(rows[0].cc_price, 0.0)
             s.close()
+
+
+class HandlerTpSlTests(unittest.TestCase):
+    """Bug 2: a market order must create TP/SL alerts immediately -- the
+    engine's MID-based entry alert would never fire on ask/bid."""
+
+    def setUp(self):
+        self.store = alerts.AlertStore(":memory:")
+        self.handlers = handlers.Handlers(
+            settings=None, store=self.store, feed=None,
+            trade_symbol="XAUUSD")
+        self.plan = risk.TradePlan(
+            direction=risk.BUY, order_kind=risk.MARKET, entry_ref=2450.0,
+            placement_price=None, sl=2439.004, tp=2472.006,
+            dist=11.0, lots=0.04, risk_usd=50.0, widen_label="",
+            spread=0.2)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_market_creates_tp_and_sl_alerts(self):
+        class Chat:
+            id = 111
+
+        class Msg:
+            chat = Chat()
+
+        class Update:
+            effective_chat = Chat()
+            effective_message = Msg()
+
+        self.handlers._create_tp_sl_alerts(Update(), self.plan, "XAUUSD",
+                                           "1", "demo", broadcast=False)
+        rows = self.store.for_chat(111)
+        kinds = {r.kind for r in rows}
+        self.assertEqual(kinds, {alerts.KIND_TP, alerts.KIND_SL})
+        by_kind = {r.kind: r for r in rows}
+        self.assertAlmostEqual(by_kind[alerts.KIND_TP].target, 2472.006)
+        self.assertAlmostEqual(by_kind[alerts.KIND_SL].target, 2439.004)
+        self.assertEqual(by_kind[alerts.KIND_TP].direction,
+                         alerts.CROSSING_UP)
+        self.assertEqual(by_kind[alerts.KIND_SL].direction,
+                         alerts.CROSSING_DOWN)
+        self.assertEqual(by_kind[alerts.KIND_TP].trade_id, "1")
+        self.assertEqual(by_kind[alerts.KIND_SL].trade_id, "1")
+
+    def test_tp_sl_skipped_without_trade_id(self):
+        class Chat:
+            id = 111
+
+        class Update:
+            effective_chat = Chat()
+
+        self.handlers._create_tp_sl_alerts(Update(), self.plan, "XAUUSD",
+                                           "", "demo", broadcast=False)
+        self.assertEqual(self.store.for_chat(111), [])
 
 
 if __name__ == "__main__":

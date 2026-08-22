@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Cracked Alert</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --text:       #0b0c0c;
+  --text-2:     #505a5f;
+  --bg:         #ffffff;
+  --surface:    #f3f2f1;
+  --border:     #b1b4b6;
+  --border-hvy: #0b0c0c;
+  --blue:       #1d70b8;
+  --blue-bg:    #d2e2f1;
+  --green:      #00703c;
+  --green-bg:   #cce2d8;
+  --red:        #d4351c;
+  --red-bg:     #f6d7d2;
+  --yellow:     #ffdd00;
+  --nav-h:      64px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --text:      #f3f2f1;
+    --text-2:    #b1b4b6;
+    --bg:        #0b0c0c;
+    --surface:   #1d1d1d;
+    --border:    #3d4145;
+    --border-hvy:#f3f2f1;
+    --blue-bg:   #0e2a44;
+    --green-bg:  #003319;
+    --red-bg:    #4a150f;
+  }
+}
+:root[data-theme="dark"] {
+  --text:      #f3f2f1;
+  --text-2:    #b1b4b6;
+  --bg:        #0b0c0c;
+  --surface:   #1d1d1d;
+  --border:    #3d4145;
+  --border-hvy:#f3f2f1;
+  --blue-bg:   #0e2a44;
+  --green-bg:  #003319;
+  --red-bg:    #4a150f;
+}
+
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 16px;
+  line-height: 1.3;
+  background: var(--surface);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.shell {
+  width: 100%;
+  max-width: 430px;
+  min-height: 100vh;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ── Header ── */
+.hdr {
+  background: var(--text);
+  color: var(--bg);
+  padding: 14px 16px 12px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 200;
+}
+.hdr__name {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  opacity: 0.45;
+  margin-bottom: 8px;
+}
+.hdr__desc {
+  opacity: 0.5;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+.hdr__cmd__lbl {
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  opacity: 0.4;
+  margin-bottom: 4px;
+}
+.hdr__cmd__val {
+
+  font-weight: 700;
+  word-break: break-all;
+  line-height: 1.4;
+}
+.cmd-ph { opacity: 0.25; }
+
+/* ── Content ── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: calc(var(--nav-h) + 8px);
+}
+
+/* ── Bottom nav ── */
+.nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 430px;
+  height: var(--nav-h);
+  background: var(--bg);
+  border-top: 2px solid var(--border);
+  display: flex;
+  z-index: 200;
+}
+.nav__btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  color: var(--text-2);
+
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 8px 4px;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+  transition: color .1s;
+}
+.nav__btn:focus-visible { outline: 3px solid var(--yellow); outline-offset: -3px; }
+.nav__btn.is-active { color: var(--text); }
+.nav__btn.is-active::before {
+  content: '';
+  position: absolute;
+  top: -2px; left: 0; right: 0;
+  height: 4px;
+  background: var(--text);
+}
+.nav__btn svg { display: block; }
+
+/* ── Tabs ── */
+.tab { display: none; }
+.tab.is-active { display: block; }
+
+/* ── Section head ── */
+.sec-head {
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.sec-head__eye {
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+.sec-head__title {
+  font-weight: 700;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+/* ── Segment ── */
+.seg {
+  display: flex;
+  margin: 16px 16px 0;
+  border: 2px solid var(--border-hvy);
+}
+.seg__btn {
+  flex: 1;
+  padding: 10px 6px;
+
+  font-weight: 700;
+  text-align: center;
+  border: none;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.seg__btn + .seg__btn { border-left: 2px solid var(--border-hvy); }
+.seg__btn.is-active { background: var(--text); color: var(--bg); }
+.seg__btn:focus-visible { outline: 3px solid var(--yellow); outline-offset: -3px; }
+
+/* ── Account pills ── */
+.acct-row {
+  display: flex;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+.acct-pill {
+  padding: 7px 14px;
+
+  font-weight: 700;
+  border: 2px solid var(--border-hvy);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  letter-spacing: 0.02em;
+}
+.acct-pill.is-active { background: var(--text); color: var(--bg); }
+.acct-pill:focus-visible { outline: 3px solid var(--yellow); outline-offset: -3px; }
+
+/* ── Fields ── */
+.fld { padding: 14px 16px 0; }
+.fld__label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.fld__hint {
+  display: block;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.fld__input {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+
+  font-weight: 700;
+  border: 2px solid var(--border-hvy);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 0;
+}
+.fld__input::placeholder { color: var(--border); }
+.fld__input:focus { outline: 3px solid var(--yellow); outline-offset: 0; }
+.fld__select {
+  display: block;
+  width: 100%;
+  padding: 10px 36px 10px 12px;
+
+  font-weight: 700;
+  border: 2px solid var(--border-hvy);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 0;
+  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5 7l5 5 5-5' stroke='%230b0c0c' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.fld__select:focus { outline: 3px solid var(--yellow); outline-offset: 0; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .fld__select {
+    background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5 7l5 5 5-5' stroke='%23f3f2f1' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  }
+}
+:root[data-theme="dark"] .fld__select {
+  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M5 7l5 5 5-5' stroke='%23f3f2f1' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+.fld-row { display: flex; padding: 14px 16px 0; gap: 12px; }
+.fld-row .fld { padding: 0; flex: 1; }
+
+/* ── Toggle row ── */
+.tog-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  margin-top: 16px;
+}
+.tog-row__lbl { font-weight: 700; }
+.tog-row__hint { color: var(--text-2); margin-top: 2px; }
+.tog { display: flex; border: 2px solid var(--border-hvy); flex-shrink: 0; }
+.tog__btn {
+  padding: 7px 14px;
+
+  font-weight: 700;
+  border: none;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tog__btn + .tog__btn { border-left: 2px solid var(--border-hvy); }
+.tog__btn.is-active { background: var(--text); color: var(--bg); }
+.tog__btn--on.is-active { background: var(--green); color: #fff; border-color: var(--green); }
+.tog__btn:focus-visible { outline: 3px solid var(--yellow); outline-offset: -3px; }
+
+/* ── Stepper ── */
+.step-wrap { padding: 14px 16px 0; }
+.step-wrap .fld__label { margin-bottom: 6px; }
+.step { display: flex; align-items: stretch; border: 2px solid var(--border-hvy); }
+.step__btn {
+  width: 54px;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 300;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+.step__btn:active { background: var(--border); }
+.step__btn:focus-visible { outline: 3px solid var(--yellow); outline-offset: -3px; }
+.step__val {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg);
+  color: var(--text);
+  padding: 13px 8px;
+  border-left: 2px solid var(--border-hvy);
+  border-right: 2px solid var(--border-hvy);
+}
+
+/* ── Calc box ── */
+.calc {
+  margin: 16px 16px 0;
+  background: var(--surface);
+  border-left: 4px solid var(--blue);
+  padding: 12px 14px;
+}
+.calc__head {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 10px;
+}
+.calc__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 3px 0;
+}
+.calc__key { color: var(--text-2); }
+.calc__val {
+
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.calc__val.buy  { color: var(--green); }
+.calc__val.sell { color: var(--red); }
+
+/* ── Buttons ── */
+.btn {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 16px;
+  padding: 15px 16px;
+
+  font-weight: 700;
+  text-align: center;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 0;
+  line-height: 1;
+}
+.btn:focus-visible { outline: 3px solid var(--yellow); outline-offset: 0; }
+.btn--go   { background: var(--green); color: #fff; }
+.btn--go:active { background: #005a30; }
+.btn--kill { background: var(--red); color: #fff; }
+.btn--kill:active { background: #aa2a16; }
+.btn--ghost {
+  background: var(--surface);
+  color: var(--text);
+  border: 2px solid var(--border-hvy);
+  padding: 13px 16px;
+}
+.btn--ghost:active { background: var(--border); }
+
+/* ── Banner ── */
+.banner {
+  display: none;
+  margin: 16px 16px 0;
+  padding: 12px 14px;
+  border-left: 4px solid var(--green);
+  background: var(--green-bg);
+  font-weight: 700;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.banner.is-show { display: block; }
+.banner--red { border-color: var(--red); background: var(--red-bg); }
+
+/* ── Command preview ── */
+.cmd-prev {
+  margin: 16px 16px 0;
+  padding: 10px 14px;
+  border: 2px solid var(--border-hvy);
+  background: var(--surface);
+}
+.cmd-prev__lbl {
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.cmd-prev__val {
+
+  font-weight: 700;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+/* ── Guard section ── */
+.guard-body {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+/* ── Utility ── */
+.mt16 { margin-top: 16px; }
+.mb16 { margin-bottom: 16px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="hdr">
+    <div class="hdr__name">crackedalert v2</div>
+    <div class="hdr__desc">Fill in the fields. The command updates live. Tap Copy to copy it.</div>
+    <div class="hdr__cmd">
+      <div class="hdr__cmd__lbl">Will copy</div>
+      <div class="hdr__cmd__val" id="cmd-val"><span class="cmd-ph">/m {sl} n 2 0.50 live100k</span></div>
+    </div>
+  </header>
+
+  <main class="content">
+
+    <!-- ══ TRADE ══ -->
+    <div class="tab is-active" id="tab-trade">
+      <div class="sec-head">
+        <div class="sec-head__eye">Execute</div>
+        <div class="sec-head__title" id="trade-title">Market order</div>
+      </div>
+
+      <div class="seg">
+        <button class="seg__btn is-active" onclick="setOrderType('market',this.parentNode)">Market</button>
+        <button class="seg__btn"           onclick="setOrderType('pending',this.parentNode)">Pending</button>
+      </div>
+
+      <div class="acct-row">
+        <button class="acct-pill is-active" id="tp-live" onclick="selectAcct('trade','live',this)">live100k</button>
+        <button class="acct-pill"           id="tp-demo" onclick="selectAcct('trade','demo',this)">demo</button>
+      </div>
+
+      <div class="fld hidden" id="entry-fld">
+        <label class="fld__label" for="inp-entry">Entry price</label>
+        <span class="fld__hint" id="entry-hint">sl &lt; entry = BUY · sl &gt; entry = SELL</span>
+        <input class="fld__input" id="inp-entry" type="number" step="0.01"
+               placeholder="2450.00" inputmode="decimal" oninput="recalc()">
+      </div>
+
+      <div class="fld">
+        <label class="fld__label" for="inp-sl">Stop loss</label>
+        <span class="fld__hint" id="sl-hint">Absolute price level</span>
+        <input class="fld__input" id="inp-sl" type="number" step="0.01"
+               placeholder="2440.00" inputmode="decimal" oninput="recalc()">
+      </div>
+
+      <div class="tog-row">
+        <div>
+          <div class="tog-row__lbl">Widen SL</div>
+          <div class="tog-row__hint">+10 pips spread buffer</div>
+        </div>
+        <div class="tog">
+          <button class="tog__btn is-active" id="wid-n" onclick="setWiden(false)">No</button>
+          <button class="tog__btn tog__btn--on" id="wid-y" onclick="setWiden(true)">Yes</button>
+        </div>
+      </div>
+
+      <div class="step-wrap">
+        <div class="fld__label">Risk : Reward</div>
+        <div class="step">
+          <button class="step__btn" onclick="adj('rr',-0.5)" aria-label="Decrease RR">−</button>
+          <div class="step__val" id="rr-disp">1 : 2</div>
+          <button class="step__btn" onclick="adj('rr',0.5)"  aria-label="Increase RR">+</button>
+        </div>
+      </div>
+
+      <div class="step-wrap">
+        <div class="fld__label">Risk %</div>
+        <div class="step">
+          <button class="step__btn" onclick="adj('risk',-0.25)" aria-label="Decrease risk">−</button>
+          <div class="step__val" id="risk-disp">0.50%</div>
+          <button class="step__btn" onclick="adj('risk',0.25)"  aria-label="Increase risk">+</button>
+        </div>
+      </div>
+
+      <div class="step-wrap">
+        <div class="fld__label">Lot multiplier</div>
+        <span class="fld__hint" id="mult-hint">Smart SL in-between · x1 = off</span>
+        <div class="step">
+          <button class="step__btn" onclick="adj('mult',-1)" aria-label="Decrease multiplier">−</button>
+          <div class="step__val" id="mult-disp">×1</div>
+          <button class="step__btn" onclick="adj('mult',1)"   aria-label="Increase multiplier">+</button>
+        </div>
+      </div>
+
+      <!-- Smart SL -->
+      <div class="tog-row">
+        <div>
+          <div class="tog-row__lbl">Smart SL</div>
+          <div class="tog-row__hint">Auto-close on candle close</div>
+        </div>
+        <div class="tog">
+          <button class="tog__btn is-active" id="grd-off" onclick="setGuard(false)">Off</button>
+          <button class="tog__btn tog__btn--on" id="grd-on"  onclick="setGuard(true)">On</button>
+        </div>
+      </div>
+
+      <div id="guard-body" class="guard-body hidden">
+        <div class="fld-row">
+          <div class="fld">
+            <label class="fld__label" for="grd-tf">Timeframe</label>
+            <select class="fld__select" id="grd-tf" onchange="recalc()">
+              <option>M1</option><option>M5</option><option selected>M15</option>
+              <option>M30</option><option>H1</option><option>H4</option>
+              <option>D1</option><option>W1</option><option>MN1</option>
+            </select>
+          </div>
+          <div class="fld">
+            <label class="fld__label" for="grd-price">Smart SL price</label>
+            <input class="fld__input fld__input--sm" id="grd-price" type="number" step="0.01"
+                   placeholder="2440.00" inputmode="decimal" oninput="recalc()">
+          </div>
+        </div>
+      </div>
+
+      <div class="calc mt16">
+        <div class="calc__head">Calculated</div>
+        <div class="calc__row"><span class="calc__key">Direction</span><span class="calc__val" id="c-dir">-</span></div>
+        <div class="calc__row"><span class="calc__key">Risk $</span>   <span class="calc__val" id="c-risk">-</span></div>
+        <div class="calc__row"><span class="calc__key">Lot size</span> <span class="calc__val" id="c-lot">-</span></div>
+        <div class="calc__row"><span class="calc__key">Take profit</span><span class="calc__val" id="c-tp">-</span></div>
+        <div class="calc__row"><span class="calc__key">SL level</span>  <span class="calc__val" id="c-sl">-</span></div>
+        <div class="calc__row"><span class="calc__key">Account</span>  <span class="calc__val" id="c-acct">live100k</span></div>
+      </div>
+
+      <div class="banner" id="trade-banner"></div>
+      <button class="btn btn--go" onclick="execTrade()">Copy</button>
+    </div>
+
+    <!-- ══ ALERTS ══ -->
+    <div class="tab" id="tab-alerts">
+      <div class="sec-head">
+        <div class="sec-head__eye">Alerts</div>
+        <div class="sec-head__title">Price &amp; candle alerts</div>
+      </div>
+
+      <div class="seg">
+        <button class="seg__btn is-active" onclick="setAlertType('price',this.parentNode)">Price</button>
+        <button class="seg__btn"           onclick="setAlertType('candle',this.parentNode)">Candle close</button>
+      </div>
+
+      <!-- Price -->
+      <div id="form-price">
+        <div class="fld mt16">
+          <label class="fld__label" for="a-price">Target price</label>
+          <input class="fld__input" id="a-price" type="number" step="0.01"
+                 placeholder="2450.00" inputmode="decimal" oninput="updateAlertCmd()">
+        </div>
+        <div class="fld mb16">
+          <label class="fld__label" for="a-notes">Notes</label>
+          <span class="fld__hint">Optional</span>
+          <input class="fld__input fld__input--sm" id="a-notes" type="text"
+                 placeholder="approaching demand" oninput="updateAlertCmd()"
+                >
+        </div>
+        <div class="cmd-prev">
+          <div class="cmd-prev__lbl">Will copy</div>
+          <div class="cmd-prev__val" id="palrt-prev"><span class="cmd-ph">/alert {price}</span></div>
+        </div>
+        <button class="btn btn--ghost" onclick="copyAlert('price')">Copy</button>
+      </div>
+
+      <!-- Candle -->
+      <div id="form-candle" class="hidden">
+        <div class="fld-row mt16">
+          <div class="fld">
+            <label class="fld__label" for="cc-tf">Timeframe</label>
+            <select class="fld__select" id="cc-tf" onchange="updateAlertCmd()">
+              <option>M5</option><option>M15</option><option selected>M30</option>
+              <option>H1</option><option>H4</option><option>D1</option>
+            </select>
+          </div>
+          <div class="fld">
+            <label class="fld__label" for="cc-dir">Direction</label>
+            <select class="fld__select" id="cc-dir" onchange="updateAlertCmd()">
+              <option value="above">Above</option>
+              <option value="below">Below</option>
+            </select>
+          </div>
+        </div>
+        <div class="fld">
+          <label class="fld__label" for="cc-price">Price level</label>
+          <input class="fld__input" id="cc-price" type="number" step="0.01"
+                 placeholder="2450.00" inputmode="decimal" oninput="updateAlertCmd()">
+        </div>
+        <div class="fld mb16">
+          <label class="fld__label" for="cc-note">Notes</label>
+          <span class="fld__hint">Optional</span>
+          <input class="fld__input fld__input--sm" id="cc-note" type="text"
+                 placeholder="breakout" oninput="updateAlertCmd()"
+                >
+        </div>
+        <div class="cmd-prev">
+          <div class="cmd-prev__lbl">Will copy</div>
+          <div class="cmd-prev__val" id="calrt-prev"><span class="cmd-ph">/ccalert M30 {price} above XAUUSD</span></div>
+        </div>
+        <button class="btn btn--ghost" onclick="copyAlert('candle')">Copy</button>
+      </div>
+
+      <div class="banner" id="alrt-banner"></div>
+    </div>
+
+    <!-- ══ MANAGE ══ -->
+    <div class="tab" id="tab-manage">
+      <div class="sec-head">
+        <div class="sec-head__eye">Manage</div>
+        <div class="sec-head__title" id="mgmt-title">Breakeven</div>
+      </div>
+
+      <div class="seg">
+        <button class="seg__btn is-active" onclick="setManage('be',this.parentNode)">BE</button>
+        <button class="seg__btn"           onclick="setManage('close',this.parentNode)">Close</button>
+        <button class="seg__btn"           onclick="setManage('closeall',this.parentNode)">All</button>
+        <button class="seg__btn"           onclick="setManage('cancel',this.parentNode)">Cancel</button>
+      </div>
+
+      <div class="acct-row">
+        <button class="acct-pill is-active" id="mp-live" onclick="selectAcct('mgmt','live',this)">live100k</button>
+        <button class="acct-pill"           id="mp-demo" onclick="selectAcct('mgmt','demo',this)">demo</button>
+      </div>
+
+      <!-- BE -->
+      <div id="mgmt-be">
+        <div class="cmd-prev mt16">
+          <div class="cmd-prev__lbl">Will copy</div>
+          <div class="cmd-prev__val" id="be-prev">/be live100k</div>
+        </div>
+        <button class="btn btn--ghost" onclick="copyMgmt('be')">Copy</button>
+      </div>
+
+      <!-- Close -->
+      <div id="mgmt-close" class="hidden">
+        <div class="fld mt16">
+          <label class="fld__label" for="inp-pos">Position ID</label>
+          <span class="fld__hint">From /positions</span>
+          <input class="fld__input" id="inp-pos" type="number" step="1"
+                 placeholder="123456789" inputmode="numeric" oninput="updateMgmtCmd()">
+        </div>
+        <div class="cmd-prev mt16">
+          <div class="cmd-prev__lbl">Will copy</div>
+          <div class="cmd-prev__val" id="close-prev"><span class="cmd-ph">/close {id} live100k</span></div>
+        </div>
+        <button class="btn btn--kill" onclick="copyMgmt('close')">Copy</button>
+      </div>
+
+      <!-- Close all -->
+      <div id="mgmt-closeall" class="hidden">
+        <div class="cmd-prev mt16">
+          <div class="cmd-prev__lbl">Will copy</div>
+          <div class="cmd-prev__val" id="closeall-prev">/close_all live100k</div>
+        </div>
+        <button class="btn btn--kill" onclick="copyMgmt('closeall')">Copy</button>
+      </div>
+
+      <!-- Cancel order -->
+      <div id="mgmt-cancel" class="hidden">
+        <div class="fld mt16">
+          <label class="fld__label" for="inp-ord">Order ID</label>
+          <span class="fld__hint">From /orders</span>
+          <input class="fld__input" id="inp-ord" type="number" step="1"
+                 placeholder="987654321" inputmode="numeric" oninput="updateMgmtCmd()">
+        </div>
+        <div class="cmd-prev mt16">
+          <div class="cmd-prev__lbl">Will copy</div>
+          <div class="cmd-prev__val" id="cancel-prev"><span class="cmd-ph">/cancel_order {id} live100k</span></div>
+        </div>
+        <button class="btn btn--ghost" onclick="copyMgmt('cancel')">Copy</button>
+      </div>
+
+      <div class="banner" id="mgmt-banner"></div>
+    </div>
+
+  </main>
+
+  <nav class="nav">
+    <button class="nav__btn is-active" onclick="showTab('trade',this)">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <path d="M11 18V4M4 11l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"/>
+      </svg>
+      Trade
+    </button>
+    <button class="nav__btn" onclick="showTab('alerts',this)">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <path d="M11 3a6 6 0 0 1 6 6v4l1.5 2.5H3.5L5 13V9a6 6 0 0 1 6-6z" stroke="currentColor" stroke-width="2" fill="none"/>
+        <path d="M9 17a2 2 0 0 0 4 0" stroke="currentColor" stroke-width="2" fill="none"/>
+      </svg>
+      Alerts
+    </button>
+    <button class="nav__btn" onclick="showTab('manage',this)">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <rect x="3" y="5" width="16" height="2.5" fill="currentColor"/>
+        <rect x="3" y="10" width="10" height="2.5" fill="currentColor"/>
+        <rect x="3" y="15" width="13" height="2.5" fill="currentColor"/>
+      </svg>
+      Manage
+    </button>
+  </nav>
+
+</div>
+<script>
+(function () { // scope guard - functions exposed via window below
+'use strict';
+
+const S = {
+  orderType: 'market',
+  acct: { trade: 'live', mgmt: 'live' },
+  widen: false,
+  rr: 2,
+  risk: 0.5,
+  mult: 1,
+  guard: false,
+  alertType: 'price',
+  manageType: 'be',
+};
+
+const ACCOUNTS = {
+  live: { label: 'live100k', bal: 99867.87 },
+  demo: { label: 'demo',     bal: 999612.69 },
+};
+
+const MGMT_TITLES = { be: 'Breakeven', close: 'Close position', closeall: 'Close all', cancel: 'Cancel order' };
+
+function ph(s) { return `<span class="cmd-ph">${s}</span>`; }
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function copy(cmd, bannerId) {
+  navigator.clipboard.writeText(cmd).catch(() => {
+    const ta = Object.assign(document.createElement('textarea'), { value: cmd });
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  });
+  flash(bannerId, 'Copied → ' + cmd);
+}
+
+function flash(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'banner';
+  el.textContent = msg;
+  el.classList.add('is-show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('is-show'), 3000);
+}
+
+function setHdr(html) {
+  const el = document.getElementById('cmd-val');
+  if (el) el.innerHTML = html;
+}
+
+function showTab(id, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('is-active'));
+  document.querySelectorAll('.nav__btn').forEach(b => b.classList.remove('is-active'));
+  document.getElementById('tab-' + id).classList.add('is-active');
+  btn.classList.add('is-active');
+  if (id === 'trade') updateTradeCmd();
+  else if (id === 'alerts') updateAlertCmd();
+  else updateMgmtCmd();
+}
+
+// ── Trade ────────────────────────────────────────────────────────
+
+function setOrderType(type, seg) {
+  S.orderType = type;
+  seg.querySelectorAll('.seg__btn').forEach((b,i) => {
+    b.classList.toggle('is-active', i === (type === 'market' ? 0 : 1));
+  });
+  const isPend = type === 'pending';
+  document.getElementById('entry-fld').classList.toggle('hidden', !isPend);
+  document.getElementById('trade-title').textContent = isPend ? 'Pending order' : 'Market order';
+  document.getElementById('sl-hint').textContent = isPend
+    ? 'sl < entry = BUY · sl > entry = SELL'
+    : 'Absolute price - direction inferred';
+  recalc();
+}
+
+function selectAcct(ctx, key, btn) {
+  S.acct[ctx] = key;
+  const prefix = ctx === 'trade' ? 'tp-' : 'mp-';
+  document.getElementById(prefix + 'live').classList.toggle('is-active', key === 'live');
+  document.getElementById(prefix + 'demo').classList.toggle('is-active', key === 'demo');
+  if (ctx === 'trade') recalc();
+  else updateMgmtCmd();
+}
+
+function setWiden(v) {
+  S.widen = v;
+  document.getElementById('wid-n').classList.toggle('is-active', !v);
+  document.getElementById('wid-y').classList.toggle('is-active', v);
+  recalc();
+}
+
+function adj(key, delta) {
+  if (key === 'rr') {
+    S.rr = Math.max(0.5, Math.round((S.rr + delta) * 2) / 2);
+    document.getElementById('rr-disp').textContent = '1 : ' + S.rr;
+  } else if (key === 'mult') {
+    S.mult = Math.min(4, Math.max(1, S.mult + delta));
+    document.getElementById('mult-disp').textContent = '×' + S.mult;
+  } else {
+    S.risk = Math.max(0.25, Math.round((S.risk + delta) * 4) / 4);
+    document.getElementById('risk-disp').textContent = S.risk.toFixed(2) + '%';
+  }
+  recalc();
+}
+
+function setGuard(v) {
+  S.guard = v;
+  document.getElementById('grd-off').classList.toggle('is-active', !v);
+  document.getElementById('grd-on').classList.toggle('is-active', v);
+  document.getElementById('guard-body').classList.toggle('hidden', !v);
+  recalc();
+}
+
+function recalc() {
+  const info     = ACCOUNTS[S.acct.trade];
+  const riskUsd  = info.bal * (S.risk / 100);
+  const slRaw    = parseFloat(document.getElementById('inp-sl').value);
+  const entryRaw = parseFloat(document.getElementById('inp-entry').value);
+
+  let dir = '-', lots = '-', tp = '-', slLvl = '-', dirClass = '';
+
+  // The bot's multipler (x2..x4) tightens the stop from the far SL toward
+  // the entry (dist / mult) and multiplies lot size by the same factor,
+  // keeping the dollar risk identical. The calc mirrors that math.
+  const mult = S.mult > 1 ? S.mult : 1;
+
+  if (S.orderType === 'pending' && !isNaN(slRaw) && !isNaN(entryRaw) && entryRaw !== slRaw) {
+    const isBuy = slRaw < entryRaw;
+    dir = isBuy ? 'BUY' : 'SELL';
+    dirClass = isBuy ? 'buy' : 'sell';
+    const slAdj = isBuy ? slRaw - (S.widen ? 1.0 : 0) : slRaw + (S.widen ? 1.0 : 0);
+    const distFar = Math.abs(entryRaw - slAdj);
+    if (distFar > 0) {
+      const dist = distFar / mult;
+      const effSl = isBuy ? entryRaw - dist : entryRaw + dist;
+      const rawLots = riskUsd / (distFar * 100) * mult;
+      lots = (Math.floor(rawLots / 0.01 + 1e-9) * 0.01).toFixed(2);
+      slLvl = effSl.toFixed(2);
+      tp   = isBuy
+        ? (entryRaw + distFar * S.rr).toFixed(2)
+        : (entryRaw - distFar * S.rr).toFixed(2);
+    }
+  }
+
+  const dirEl = document.getElementById('c-dir');
+  dirEl.textContent = dir;
+  dirEl.className   = 'calc__val ' + dirClass;
+  document.getElementById('c-risk').textContent = '$' + riskUsd.toFixed(2);
+  document.getElementById('c-lot').textContent  = lots;
+  document.getElementById('c-tp').textContent   = tp;
+  document.getElementById('c-sl').textContent   = slLvl;
+  document.getElementById('c-acct').textContent = info.label;
+
+  updateTradeCmd();
+}
+
+function updateTradeCmd() {
+  if (!document.getElementById('tab-trade').classList.contains('is-active')) return;
+  const sl    = document.getElementById('inp-sl').value;
+  const entry = document.getElementById('inp-entry').value;
+  const w     = S.widen ? 'y' : 'n';
+  const acct  = ACCOUNTS[S.acct.trade].label;
+
+  let parts;
+  if (S.orderType === 'market') {
+    parts = ['/m', sl ? parseFloat(sl).toFixed(2) : ph('{sl}'), w, S.rr, S.risk, acct];
+  } else {
+    parts = ['/p',
+      entry ? parseFloat(entry).toFixed(2) : ph('{entry}'),
+      sl    ? parseFloat(sl).toFixed(2)    : ph('{sl}'),
+      w, S.rr, S.risk, acct];
+  }
+
+  if (S.mult > 1) {
+    parts.push('x' + S.mult);
+  }
+
+  if (S.guard) {
+    const tf = document.getElementById('grd-tf').value;
+    const gp = document.getElementById('grd-price').value;
+    parts.push(tf);
+    parts.push(gp ? parseFloat(gp).toFixed(2) : ph('{guard_price}'));
+  }
+
+  setHdr(parts.join(' '));
+}
+
+function execTrade() {
+  const sl = document.getElementById('inp-sl').value;
+  if (!sl) { document.getElementById('inp-sl').focus(); return; }
+  const w    = S.widen ? 'y' : 'n';
+  const acct = ACCOUNTS[S.acct.trade].label;
+
+  let cmd;
+  if (S.orderType === 'market') {
+    cmd = `/m ${parseFloat(sl).toFixed(2)} ${w} ${S.rr} ${S.risk} ${acct}`;
+  } else {
+    const entry = document.getElementById('inp-entry').value;
+    if (!entry) { document.getElementById('inp-entry').focus(); return; }
+    cmd = `/p ${parseFloat(entry).toFixed(2)} ${parseFloat(sl).toFixed(2)} ${w} ${S.rr} ${S.risk} ${acct}`;
+  }
+
+  if (S.mult > 1) {
+    cmd += ` x${S.mult}`;
+  }
+
+  if (S.guard) {
+    const tf = document.getElementById('grd-tf').value;
+    const gp = document.getElementById('grd-price').value;
+    if (gp) cmd += ` ${tf} ${parseFloat(gp).toFixed(2)}`;
+  }
+
+  copy(cmd, 'trade-banner');
+}
+
+// ── Alerts ───────────────────────────────────────────────────────
+
+function setAlertType(type, seg) {
+  S.alertType = type;
+  seg.querySelectorAll('.seg__btn').forEach((b,i) => {
+    b.classList.toggle('is-active', i === (type === 'price' ? 0 : 1));
+  });
+  document.getElementById('form-price').classList.toggle('hidden', type !== 'price');
+  document.getElementById('form-candle').classList.toggle('hidden', type !== 'candle');
+  updateAlertCmd();
+}
+
+function updateAlertCmd() {
+  let html;
+  if (S.alertType === 'price') {
+    const p = document.getElementById('a-price').value;
+    const n = document.getElementById('a-notes').value;
+    html = `/alert ${p ? parseFloat(p).toFixed(2) : ph('{price}')}${n ? ' ' + esc(n) : ''}`;
+    document.getElementById('palrt-prev').innerHTML = html;
+  } else {
+    const p   = document.getElementById('cc-price').value;
+    const tf  = document.getElementById('cc-tf').value;
+    const dir = document.getElementById('cc-dir').value;
+    const n   = document.getElementById('cc-note').value;
+    html = `/ccalert ${tf} ${p ? parseFloat(p).toFixed(2) : ph('{price}')} ${dir} XAUUSD${n ? ' ' + esc(n) : ''}`;
+    document.getElementById('calrt-prev').innerHTML = html;
+  }
+  if (document.getElementById('tab-alerts').classList.contains('is-active')) setHdr(html);
+}
+
+function copyAlert(type) {
+  if (type === 'price') {
+    const p = document.getElementById('a-price').value;
+    if (!p) { document.getElementById('a-price').focus(); return; }
+    const n = document.getElementById('a-notes').value;
+    copy(`/alert ${parseFloat(p).toFixed(2)}${n ? ' ' + n : ''}`, 'alrt-banner');
+    document.getElementById('a-price').value = '';
+    document.getElementById('a-notes').value = '';
+  } else {
+    const p = document.getElementById('cc-price').value;
+    if (!p) { document.getElementById('cc-price').focus(); return; }
+    const tf  = document.getElementById('cc-tf').value;
+    const dir = document.getElementById('cc-dir').value;
+    const n   = document.getElementById('cc-note').value;
+    copy(`/ccalert ${tf} ${parseFloat(p).toFixed(2)} ${dir} XAUUSD${n ? ' ' + n : ''}`, 'alrt-banner');
+    document.getElementById('cc-price').value = '';
+    document.getElementById('cc-note').value  = '';
+  }
+  updateAlertCmd();
+}
+
+// ── Manage ───────────────────────────────────────────────────────
+
+function setManage(type, seg) {
+  S.manageType = type;
+  const types = ['be','close','closeall','cancel'];
+  seg.querySelectorAll('.seg__btn').forEach((b,i) => b.classList.toggle('is-active', types[i] === type));
+  types.forEach(t => document.getElementById('mgmt-' + t).classList.toggle('hidden', t !== type));
+  document.getElementById('mgmt-title').textContent = MGMT_TITLES[type];
+  updateMgmtCmd();
+}
+
+function updateMgmtCmd() {
+  const acct = ACCOUNTS[S.acct.mgmt].label;
+  const posId = (document.getElementById('inp-pos') || {}).value || '';
+  const ordId = (document.getElementById('inp-ord') || {}).value || '';
+
+  document.getElementById('be-prev').innerHTML       = `/be ${acct}`;
+  document.getElementById('closeall-prev').innerHTML = `/close_all ${acct}`;
+  document.getElementById('close-prev').innerHTML    = `/close ${posId || ph('{id}')} ${acct}`;
+  document.getElementById('cancel-prev').innerHTML   = `/cancel_order ${ordId || ph('{id}')} ${acct}`;
+
+  if (document.getElementById('tab-manage').classList.contains('is-active')) {
+    const t = S.manageType;
+    let html = '';
+    if (t === 'be')       html = `/be ${acct}`;
+    else if (t === 'closeall') html = `/close_all ${acct}`;
+    else if (t === 'close')  html = `/close ${posId || ph('{id}')} ${acct}`;
+    else if (t === 'cancel') html = `/cancel_order ${ordId || ph('{id}')} ${acct}`;
+    setHdr(html);
+  }
+}
+
+function copyMgmt(type) {
+  const acct = ACCOUNTS[S.acct.mgmt].label;
+  let cmd = '';
+  if (type === 'be')        cmd = `/be ${acct}`;
+  else if (type === 'closeall') cmd = `/close_all ${acct}`;
+  else if (type === 'close') {
+    const id = document.getElementById('inp-pos').value;
+    if (!id) { document.getElementById('inp-pos').focus(); return; }
+    cmd = `/close ${id} ${acct}`;
+  } else if (type === 'cancel') {
+    const id = document.getElementById('inp-ord').value;
+    if (!id) { document.getElementById('inp-ord').focus(); return; }
+    cmd = `/cancel_order ${id} ${acct}`;
+  }
+  if (cmd) copy(cmd, 'mgmt-banner');
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+recalc();
+updateAlertCmd();
+updateMgmtCmd();
+
+// Expose to global scope for onclick handlers
+Object.assign(window, {
+  showTab, setOrderType, selectAcct, setWiden, adj, setGuard, execTrade,
+  setAlertType, updateAlertCmd, copyAlert,
+  setManage, updateMgmtCmd, copyMgmt,
+  recalc,
+});
+
+})();
+</script>
+</body>
+</html>
