@@ -175,7 +175,29 @@ class SmartSL(unittest.TestCase):
         p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
                              rr=2, risk_pct=0.5, balance=10000)
         self.assertIsNone(p.smart_sl)
+        self.assertIsNone(p.smart_risk_usd)
         self.assertIsNone(p.smart_risk_pct)
+
+    def test_smart_sl_dollar_mode_reports_dollars(self):
+        # $50 risk (dollar mode), risk_pct=0; smart stop at half the
+        # original distance -> $25 exposure at the smart stop.
+        p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
+                             rr=2, risk_pct=0, balance=10000,
+                             risk_usd=50.0, smart_sl=2445.0)
+        self.assertAlmostEqual(p.sl, 2445.0)
+        self.assertAlmostEqual(p.smart_risk_usd, 25.0)   # 50 * (5/10)
+        # % of balance: 25 / 10000 * 100
+        self.assertAlmostEqual(p.smart_risk_pct, 0.25)
+
+    def test_smart_sl_zero_dist_no_division_error(self):
+        # dist == 0 with a smart_sl must not raise a ZeroDivisionError; the
+        # pure function reports no smart-risk instead.
+        p = risk.plan_market(bid=2450.0, ask=2450.0, sl=2450.0, widen=False,
+                             rr=1, risk_pct=1, balance=10000, smart_sl=2450.0)
+        self.assertEqual(p.dist, 0.0)
+        self.assertIsNone(p.smart_risk_usd)
+        self.assertIsNone(p.smart_risk_pct)
+        self.assertAlmostEqual(p.smart_sl, 2450.0)
 
 
 class DollarRisk(unittest.TestCase):

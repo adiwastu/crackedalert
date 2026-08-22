@@ -667,7 +667,8 @@ class Handlers:
             sl=plan.sl, tp=plan.tp, rr=args.rr,
             widen_label=plan.widen_label, digits=symbol.digits,
             dollar_risk=args.risk_usd is not None,
-            smart_sl=plan.smart_sl, smart_risk_pct=plan.smart_risk_pct))
+            smart_sl=plan.smart_sl, smart_risk_usd=plan.smart_risk_usd,
+            smart_risk_pct=plan.smart_risk_pct))
 
         if is_market:
             # Market fills are already in: the engine's entry alert would

@@ -170,6 +170,36 @@ class OrderSuccessTests(unittest.TestCase):
             widen_label="", digits=2)
         self.assertIn("\U0001F534", text)
 
+    def test_order_success_smart_sl_percent_mode(self):
+        text = fmt.order_success(
+            ticket=1, symbol="XAUUSD", direction="BUY", kind_label="PENDING",
+            account="demo", lots=0.19, risk_pct=1.0, risk_usd=100.0,
+            entry_label="2400.00 (placed at 2400.20)", sl=2398.5, tp=2415.8,
+            rr=3.0, widen_label="", digits=2,
+            smart_sl=2398.5, smart_risk_pct=0.33)
+        self.assertIn("risk at smart SL <code>2398.50</code> = 0.33%", text)
+
+    def test_order_success_smart_sl_dollar_mode(self):
+        # Dollar risk + smart SL: reports the dollar exposure, not 0%.
+        text = fmt.order_success(
+            ticket=1, symbol="XAUUSD", direction="BUY", kind_label="MARKET",
+            account="demo", lots=0.05, risk_pct=0.0, risk_usd=50.0,
+            entry_label="2450.00", sl=2445.0, tp=2472.0, rr=2.0,
+            widen_label="", digits=2, dollar_risk=True,
+            smart_sl=2445.0, smart_risk_usd=25.0)
+        self.assertIn("risk at smart SL <code>2445.00</code> = <code>$25.00</code>", text)
+        # Must NOT show a bogus 0% for the smart stop.
+        self.assertNotIn("= 0%", text)
+
+    def test_order_success_no_smart_sl_single_blank_line(self):
+        # Without a smart SL there should be no stray double blank line.
+        text = fmt.order_success(
+            ticket=1, symbol="XAUUSD", direction="BUY", kind_label="MARKET",
+            account="demo", lots=0.04, risk_pct=0.5, risk_usd=50.0,
+            entry_label="2450.00", sl=2439.0, tp=2472.0, rr=2.0,
+            widen_label="", digits=2, dollar_risk=False)
+        self.assertNotIn("\n\n\n", text)
+
     def test_order_failed(self):
         text = fmt.order_failed("XAUUSD", "BUY", "MARKET", "demo",
                                 "no money", "10004")

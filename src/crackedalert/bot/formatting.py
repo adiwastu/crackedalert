@@ -266,28 +266,33 @@ def order_success(ticket, symbol: str, direction: str, kind_label: str,
                   entry_label: str, sl: float, tp: float, rr: float,
                   widen_label: str, digits: int = 2,
                   dollar_risk: bool = False,
-                  smart_sl: float = None,
-                  smart_risk_pct: float = None) -> str:
+                  smart_sl: Optional[float] = None,
+                  smart_risk_usd: Optional[float] = None,
+                  smart_risk_pct: Optional[float] = None) -> str:
 
     if dollar_risk:
-        risk_text = "<code>$%.2f</code> risk = %s%%" % (
-            risk_usd, esc(_trim(risk_pct)))
+        risk_text = "<code>$%.2f</code> risk" % risk_usd
     else:
-        risk_text = "%s%% risk = <code>$%.2f</code> (%s at original SL)" % (
-            esc(_trim(risk_pct)), risk_usd, esc(_trim(risk_pct)))
+        risk_text = "%s%% risk = <code>$%.2f</code> (at original SL)" % (
+            esc(_trim(risk_pct)), risk_usd)
 
     sl_text = "%.*f" % (digits, sl)
     if widen_label:
         sl_text = "%s%s" % (sl_text, esc(widen_label))
 
-    # Smart SL (exact price): the stop is placed at the requested price; the
-    # exposure there is the stated risk% scaled by the distance ratio.
+    # Smart SL (exact price): the stop is placed at the requested price and
+    # the exposure there is risk_usd * smart_dist/dist. Show it as a % of
+    # balance (pct mode) or in dollars (dollar-risk mode).
     smart_text = ""
-    if smart_sl is not None and smart_risk_pct is not None:
-        smart_text = "\u00b7 risk at smart SL <code>%.*f</code> = %s%%" % (
-            digits, smart_sl, esc(_trim(smart_risk_pct)))
+    if smart_sl is not None:
+        if smart_risk_pct is not None:
+            smart_text = "\u00b7 risk at smart SL <code>%.*f</code> = %s%%" % (
+                digits, smart_sl, esc(_trim(smart_risk_pct)))
+        elif smart_risk_usd is not None:
+            smart_text = "\u00b7 risk at smart SL <code>%.*f</code> = <code>$%.2f</code>" % (
+                digits, smart_sl, smart_risk_usd)
 
-    return "\n".join([
+    lines = [
         "\u2705 %s <b>%s %s</b> \u00b7 %s \u00b7 %s" % (
             _side_glyph(direction), esc(direction), esc(symbol),
             esc(kind_label), esc(account)),
@@ -297,10 +302,13 @@ def order_success(ticket, symbol: str, direction: str, kind_label: str,
             sl_text, digits, tp),
         "<code>%.2f</code> lots \u00b7 %s \u00b7 RR 1:%s" % (
             lots, risk_text, esc(_trim(rr))),
-        "%s" % smart_text if smart_text else "",
-        "",
-        "<i>ticket #%s</i>" % esc(ticket if ticket is not None else "?"),
-    ])
+    ]
+    if smart_text:
+        lines.append(smart_text)
+    lines.extend(["", "<i>ticket #%s</i>" %
+                  esc(ticket if ticket is not None else "?")])
+
+    return "\n".join(lines)
 
 
 def order_failed(symbol: str, direction: str, kind_label: str, account: str,

@@ -33,7 +33,8 @@ class TradePlan:
     widen_label: str          # "" or WIDEN_LABEL
     spread: float
     smart_sl: Optional[float] = None  # exact smart-stop price, or None
-    smart_risk_pct: Optional[float] = None  # risk at the smart stop, if any
+    smart_risk_usd: Optional[float] = None  # $ exposure at the smart stop, if any
+    smart_risk_pct: Optional[float] = None  # % of balance at the smart stop, if any
 
 
 def _lots(risk_usd: float, dist: float, usd_per_point_per_lot: float,
@@ -75,13 +76,17 @@ def _build(direction: str, order_kind: str, entry_ref: float,
     # Lots are ALWAYS sized off the original SL distance, so the stated
     # "risk%" is the loss if price reaches the original SL. An exact smart
     # SL price only moves where the stop sits: it must be between the fill
-    # (basis) and the original SL, and the exposure there is the same
-    # risk% scaled by smart_dist/dist.
-    if smart_sl is not None:
+    # (basis) and the original SL, and the exposure there is scaled by
+    # smart_dist/dist. The exposure is reported in dollars and as a % of
+    # balance; for a valid smart stop dist is > 0 by construction, but the
+    # pure function still guards the division.
+    if smart_sl is not None and dist > 0:
         smart_dist = abs(basis - smart_sl)
-        smart_risk_pct = risk_pct * (smart_dist / dist)
+        smart_risk_usd = risk_usd * (smart_dist / dist)
+        smart_risk_pct = (smart_risk_usd / balance * 100.0) if balance > 0 else None
         sl = smart_sl  # place the stop exactly at the requested price
     else:
+        smart_risk_usd = None
         smart_risk_pct = None
     lots = _lots(risk_usd, dist, usd_per_point_per_lot,
                  min_lots, lot_step)
@@ -90,7 +95,8 @@ def _build(direction: str, order_kind: str, entry_ref: float,
         direction=direction, order_kind=order_kind, entry_ref=entry_ref,
         placement_price=placement_price, sl=sl, tp=tp, dist=dist, lots=lots,
         risk_usd=risk_usd, widen_label=widen_label, spread=spread,
-        smart_sl=smart_sl, smart_risk_pct=smart_risk_pct)
+        smart_sl=smart_sl, smart_risk_usd=smart_risk_usd,
+        smart_risk_pct=smart_risk_pct)
 
 
 def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,

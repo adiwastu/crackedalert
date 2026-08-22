@@ -175,17 +175,20 @@ class TradingService:
 
         smart_sl = getattr(args, "smart_sl", None)
         # Validate the exact smart-SL price against the actual fill before
-        # planning: it must sit strictly between the fill (bid for SELL /
-        # ask for BUY market; the placement price for pending) and the
+        # planning: it must sit strictly between the actual fill and the
         # original (widen-adjusted) SL, so it genuinely tightens the stop.
+        # The "actual fill" mirrors risk.py: market = bid for SELL / ask for
+        # BUY; pending = the spread-offset placement price (entry +/- spread).
         if smart_sl is not None:
+            spread = quote.ask - quote.bid
             if is_market:
                 mid = (quote.bid + quote.ask) / 2.0
                 fill_side = risk.BUY if args.sl < mid else risk.SELL
                 fill_price = quote.ask if fill_side == risk.BUY else quote.bid
             else:
                 fill_side = risk.BUY if args.sl < args.entry else risk.SELL
-                fill_price = args.entry
+                fill_price = args.entry + spread if fill_side == risk.BUY \
+                    else args.entry - spread
             sl_bound = args.sl - (risk.WIDEN_AMOUNT if args.widen else 0) \
                 if fill_side == risk.BUY else \
                 args.sl + (risk.WIDEN_AMOUNT if args.widen else 0)

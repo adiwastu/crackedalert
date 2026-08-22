@@ -276,6 +276,36 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["stopLoss"], 2398.5)
         self.assertEqual(sent["takeProfit"], 2415.8)   # 2400.2 + 5.2*3
 
+    def test_pending_smart_sl_between_entry_and_placement_valid(self):
+        # Regressions for the placement-fill fix: the fill for a pending BUY
+        # is entry + spread (2400.2), so a smart SL at 2400.1 (above raw
+        # entry, below the placement fill) must be accepted — validating
+        # against raw entry alone would wrongly reject it.
+        args = TradeArgs(entry=2400.0, sl=2395.0, widen=False, rr=3,
+                         risk_pct=1, account="demo", smart_sl=2400.1)
+        plan, symbol, result, lots = run(self.service.execute(args, False))
+        sent = self.cli.orders[0]
+        self.assertEqual(sent["stopLoss"], 2400.1)
+
+    def test_market_smart_sl_dollar_mode_reports_dollars(self):
+        # $50 risk (dollar mode) + smart stop at half distance -> $25.
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.0, account="demo", risk_usd=50.0,
+                         smart_sl=2445.0)
+        plan, symbol, result, lots = run(self.service.execute(
+            args, True, risk_usd=args.risk_usd))
+        self.assertEqual(plan.sl, 2445.0)
+        self.assertAlmostEqual(plan.smart_risk_usd, 25.0)
+
+    def test_market_smart_sl_dollar_mode_out_of_range_rejected(self):
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.0, account="demo", risk_usd=50.0,
+                         smart_sl=2435.0)
+        with self.assertRaises(trading.TradeRejected) as cm:
+            run(self.service.execute(args, True, risk_usd=args.risk_usd))
+        self.assertIn("smart SL", str(cm.exception))
+
+
     def test_dollar_risk_executes_exact_amount(self):
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
                          risk_pct=0.0, account="demo", risk_usd=50.0)
