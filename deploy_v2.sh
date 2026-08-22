@@ -82,16 +82,19 @@ if grep -qF "$legacy_marker" /etc/caddy/Caddyfile; then
 fi
 
 CADDY_MARKER='site alert.hotland3x3.my.id (crackedalert-ui)'
-if ! grep -qF "$CADDY_MARKER" /etc/caddy/Caddyfile; then
-    echo "=> Appending UI site block to /etc/caddy/Caddyfile..."
-    {
-        echo ""
-        echo "# $CADDY_MARKER -- auto-managed by deploy_v2.sh"
-        cat "$REPO_DIR/deploy/caddy-ui.caddyfile"
-    } >> /etc/caddy/Caddyfile
-else
-    echo "=> UI site block already present -- skipping append."
+# Always rewrite the auto-managed alert.* site block from the repo template,
+# so new routes (e.g. the /alert-status proxy) apply on every deploy instead
+# of being skipped once the block already exists.
+if grep -qF "$CADDY_MARKER" /etc/caddy/Caddyfile; then
+    echo "=> Updating auto-managed UI site block in /etc/caddy/Caddyfile..."
+    sed -i "/^# $CADDY_MARKER -- auto-managed by deploy_v2.sh/,/^}/d" /etc/caddy/Caddyfile
 fi
+echo "=> Appending UI site block to /etc/caddy/Caddyfile..."
+{
+    echo ""
+    echo "# $CADDY_MARKER -- auto-managed by deploy_v2.sh"
+    cat "$REPO_DIR/deploy/caddy-ui.caddyfile"
+} >> /etc/caddy/Caddyfile
 
 if command -v caddy >/dev/null 2>&1; then
     caddy validate --config /etc/caddy/Caddyfile

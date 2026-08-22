@@ -18,6 +18,7 @@ from telegram.ext import Application
 from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
                      CandleAlertStore, CANDLE_ABOVE, CANDLE_BELOW,
                      CROSSING_UP, KIND_SL, KIND_TP, direction_for_side)
+from .alert_status import ActiveAlert, AlertStatusServer
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
 from .bot.handlers import Handlers
@@ -127,7 +128,13 @@ async def _run_bot(settings: Settings) -> None:
     app = (Application.builder()
            .token(settings.telegram_bot_token).build())
 
+    active_alert = ActiveAlert()
+    status_server = AlertStatusServer(
+        token=settings.alert_status_token, active=active_alert,
+        port=settings.alert_status_port)
+
     async def notify(chat_id: int, text: str) -> None:
+        active_alert.set(text)
         await app.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
 
     feed_account = settings.accounts[settings.price_feed_account]
@@ -163,6 +170,7 @@ async def _run_bot(settings: Settings) -> None:
 
     async def broadcast(text: str) -> None:
         """Send a message to every subscriber (auto trade alerts)."""
+        active_alert.set(text)
         for cid in subscription_store.all_ids():
             try:
                 await app.bot.send_message(cid, text,
@@ -292,11 +300,13 @@ async def _run_bot(settings: Settings) -> None:
 
     async with app:
         await app.start()
+        await status_server.start()
         await app.updater.start_polling(allowed_updates=["message"])
         try:
             await stop.wait()
         finally:
             await app.updater.stop()
+            await status_server.stop()
             await app.stop()
 
     refresh_task.cancel()

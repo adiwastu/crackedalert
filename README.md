@@ -70,6 +70,8 @@ CTRADER_ACCOUNTS={"main":{"env":"live","id":12345678},"demo":{"env":"demo","id":
 
 `ALLOWED_CHAT_IDS` controls which chats can use gated commands. Additional chats can subscribe dynamically with `/subscribe`.
 
+For the alarm-app endpoint (ring until dismissed), see [`ALARM_APP.md`](ALARM_APP.md) and set `ALERT_STATUS_TOKEN` / `ALERT_STATUS_PORT`.
+
 ---
 
 ## Local Setup

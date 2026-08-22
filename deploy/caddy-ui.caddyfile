@@ -1,5 +1,15 @@
-YOUR_DOMAIN {
-	root * /var/www/crackedalert-ui
-	redir / /ui.html 302
-	file_server
+alert.hotland3x3.my.id {
+	# Alert-status API for the mobile alarm app -> in-process bot endpoint.
+	handle /alert-status {
+		reverse_proxy 127.0.0.1:8190
+	}
+	handle /ack {
+		reverse_proxy 127.0.0.1:8190
+	}
+	# Static command-builder UI for everything else.
+	handle {
+		root * /var/www/crackedalert-ui
+		redir / /ui.html 302
+		file_server
+	}
 }

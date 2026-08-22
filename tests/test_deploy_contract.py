@@ -33,6 +33,21 @@ class DeployContractTest(unittest.TestCase):
         self.assertEqual(hosts, ["alert.hotland3x3.my.id"])
         self.assertIn("/var/www/crackedalert-ui", text)
 
+    def test_caddy_alert_status_proxy_present(self) -> None:
+        # The mobile alarm app polls /alert-status (and /ack) through Caddy,
+        # which reverse-proxies them to the bot's in-process endpoint.
+        text = CADDY_UI_PATH.read_text(encoding="utf-8")
+        self.assertIn("handle /alert-status", text)
+        self.assertIn("handle /ack", text)
+        self.assertIn("reverse_proxy 127.0.0.1:8190", text)
+
+    def test_deploy_rewrites_auto_managed_block(self) -> None:
+        # deploy_v2.sh must rewrite the auto-managed alert.* block from the
+        # repo template on every run so new routes apply, not skip once present.
+        text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("Updating auto-managed UI site block", text)
+
+
     def test_no_repo_dir_placeholder_in_deploy_config(self) -> None:
         # The old nginx config was rendered from %REPO_DIR%, which pointed at
         # the repo checkout under /root and could 404 after re-provisioning.

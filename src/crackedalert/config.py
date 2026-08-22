@@ -32,6 +32,10 @@ class Settings:
     price_feed_account: str = "demo"
     data_dir: str = DEFAULT_DATA_DIR
     trade_symbol: str = "XAUUSD"
+    # Alert-status HTTP endpoint for the mobile alarm app. Empty token
+    # disables the endpoint entirely (safe default).
+    alert_status_token: str = ""
+    alert_status_port: int = 8190
 
     @property
     def tokens_file(self) -> str:
@@ -112,4 +116,7 @@ def load_settings() -> Settings:
         or DEFAULT_DATA_DIR,
         trade_symbol=os.environ.get("TRADE_SYMBOL", "XAUUSD").strip().upper()
         or "XAUUSD",
+        alert_status_token=os.environ.get("ALERT_STATUS_TOKEN", "").strip(),
+        alert_status_port=int(
+            os.environ.get("ALERT_STATUS_PORT", "8190").strip() or "8190"),
     )
