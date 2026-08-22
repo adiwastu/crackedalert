@@ -173,18 +173,40 @@ class TradingService:
 
         usd_per_point = symbol.lot_size / 100.0 if symbol.lot_size else 100.0
 
-        mult = getattr(args, "mult", 1.0) or 1.0
+        smart_sl = getattr(args, "smart_sl", None)
+        # Validate the exact smart-SL price against the actual fill before
+        # planning: it must sit strictly between the fill (bid for SELL /
+        # ask for BUY market; the placement price for pending) and the
+        # original (widen-adjusted) SL, so it genuinely tightens the stop.
+        if smart_sl is not None:
+            if is_market:
+                mid = (quote.bid + quote.ask) / 2.0
+                fill_side = risk.BUY if args.sl < mid else risk.SELL
+                fill_price = quote.ask if fill_side == risk.BUY else quote.bid
+            else:
+                fill_side = risk.BUY if args.sl < args.entry else risk.SELL
+                fill_price = args.entry
+            sl_bound = args.sl - (risk.WIDEN_AMOUNT if args.widen else 0) \
+                if fill_side == risk.BUY else \
+                args.sl + (risk.WIDEN_AMOUNT if args.widen else 0)
+            lo = min(fill_price, sl_bound)
+            hi = max(fill_price, sl_bound)
+            if not (lo < smart_sl < hi):
+                raise TradeRejected(
+                    "error: smart SL %.2f must sit between the fill (%.2f) "
+                    "and the original SL (%.2f)."
+                    % (smart_sl, fill_price, sl_bound))
         if is_market:
             plan = risk.plan_market(
                 quote.bid, quote.ask, args.sl, args.widen, args.rr,
                 args.risk_pct, balance, usd_per_point_per_lot=usd_per_point,
-                risk_usd=risk_usd, mult=mult)
+                risk_usd=risk_usd, smart_sl=smart_sl)
         else:
             plan = risk.plan_pending(
                 quote.bid, quote.ask, args.entry, args.sl, args.widen,
                 args.rr, args.risk_pct, balance,
                 usd_per_point_per_lot=usd_per_point, risk_usd=risk_usd,
-                mult=mult)
+                smart_sl=smart_sl)
 
         if plan.lots <= 0:
             raise TradeRejected(

@@ -118,6 +118,66 @@ class LotEdgeCases(unittest.TestCase):
         self.assertLessEqual(risk_at_sl, p.risk_usd + 1e-9)
 
 
+class SmartSL(unittest.TestCase):
+    """Exact smart-SL price: stop placed at the price, lots anchored to the
+    original SL, risk at the smart stop = risk_pct * smart_dist/dist."""
+
+    def test_pending_buy_smart_stop_exact_and_risk_scaled(self):
+        # fill 2400.2, sl 2395 (dist 5.2), smart 2398.5 -> smart_dist 1.7
+        p = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2395.0,
+                              widen=False, rr=3, risk_pct=1, balance=10000,
+                              smart_sl=2398.5)
+        self.assertAlmostEqual(p.sl, 2398.5)          # stop exactly at price
+        self.assertAlmostEqual(p.dist, 5.2)           # original SL distance
+        # lots anchored to the ORIGINAL SL distance (== no-mult x1 sizing)
+        p_plain = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2395.0,
+                                    widen=False, rr=3, risk_pct=1,
+                                    balance=10000)
+        self.assertAlmostEqual(p.lots, p_plain.lots)
+        self.assertAlmostEqual(p.lots, 0.19)
+        # risk at the smart stop = 1% * 1.7/5.2
+        self.assertAlmostEqual(p.smart_risk_pct, 1 * (1.7 / 5.2))
+        # TP still anchored to the original SL distance * RR
+        self.assertAlmostEqual(p.tp, 2400.2 + 5.2 * 3)
+
+    def test_pending_sell_smart_stop(self):
+        # entry 2500, sl 2510, spread 0.2 -> fill 2499.8 (sell below), so
+        # original dist = |2499.8 - 2510| = 10.2; smart 2505 -> smart_dist 5.2
+        p = risk.plan_pending(2449.8, 2450.0, entry=2500.0, sl=2510.0,
+                              widen=False, rr=1, risk_pct=2, balance=10000,
+                              smart_sl=2505.0)
+        self.assertAlmostEqual(p.sl, 2505.0)
+        smart_dist = abs(2499.8 - 2505.0)
+        orig_dist = abs(2499.8 - 2510.0)
+        self.assertAlmostEqual(p.smart_risk_pct, 2 * (smart_dist / orig_dist))
+
+    def test_market_buy_smart_stop_uses_ask(self):
+        # bid/ask 2449.8/2450.0, SL 2440 -> fill 2450 (ask), smart 2445
+        p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
+                             rr=2, risk_pct=0.5, balance=10000,
+                             smart_sl=2445.0)
+        self.assertEqual(p.direction, risk.BUY)
+        self.assertAlmostEqual(p.entry_ref, 2450.0)
+        self.assertAlmostEqual(p.sl, 2445.0)          # exact smart stop
+        self.assertAlmostEqual(p.dist, 10.0)
+        self.assertAlmostEqual(p.smart_risk_pct, 0.5 * (2450.0 - 2445.0) / 10.0)
+
+    def test_smart_equals_original_sl_report_no_division_err(self):
+        # smart at the original SL (edge allowed by math but meaningless):
+        # lots still anchor to original SL distance.
+        p = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2395.0,
+                              widen=False, rr=3, risk_pct=1, balance=10000,
+                              smart_sl=2395.0)
+        self.assertAlmostEqual(p.sl, 2395.0)
+        self.assertAlmostEqual(p.smart_risk_pct, 1.0, delta=1e-9)
+
+    def test_no_smart_sl_fields_none(self):
+        p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
+                             rr=2, risk_pct=0.5, balance=10000)
+        self.assertIsNone(p.smart_sl)
+        self.assertIsNone(p.smart_risk_pct)
+
+
 class DollarRisk(unittest.TestCase):
     def test_dollar_override_ignores_balance(self):
         # $50 risk on a $1M balance: same lots as $50 on $10k balance

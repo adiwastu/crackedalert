@@ -1,12 +1,13 @@
 """Contract test for frontend/ui.html vs the backend command grammar.
 
 The bot accepts a trailing --all flag on /alert and /ccalert to broadcast
-to all subscribed chats (_pop_broadcast in bot/handlers.py). This test
-ensures the static UI still emits that flag, so a future UI-only change
-can't silently regress the "alert all subscribers" feature.
+to all subscribed chats, and an exact --smart-sl <price> on /m and /p (the
+smart-SL price replaced the old x<mult> token). These tests ensure the
+static UI still emits those tokens, so a future UI-only change can't
+silently regress them.
 
 The html is a static single-file app (no build step), so the easiest
-robust check is string-level assertions on the relevant JS.
+robust check is string-level assertions on the relevant JS/markup.
 """
 
 import unittest
@@ -14,7 +15,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 UI_PATH = ROOT / "frontend" / "ui.html"
-BUILDER_PATH = ROOT / "command_builder.html"
 
 
 class FrontendContractTest(unittest.TestCase):
@@ -29,43 +29,56 @@ class FrontendContractTest(unittest.TestCase):
         self.assertRegex(self.ui, r"v2\.0\.\d+")
 
     def test_broadcast_toggles_present(self) -> None:
-        self.assertIn('onclick="setPriceBroadcast(false)"', self.ui)
-        self.assertIn('onclick="setPriceBroadcast(true)"', self.ui)
-        self.assertIn('onclick="setCandleBroadcast(false)"', self.ui)
-        self.assertIn('onclick="setCandleBroadcast(true)"', self.ui)
+        # Alert-all broadcasts are exposed as checkboxes in the UI.
+        self.assertIn("pa-all", self.ui)
+        self.assertIn("ca-all", self.ui)
+        self.assertIn("S.priceBroadcast=this.checked", self.ui)
+        self.assertIn("S.candleBroadcast=this.checked", self.ui)
 
     def test_state_has_broadcast_flags(self) -> None:
-        self.assertIn("priceBroadcast: false", self.ui)
-        self.assertIn("candleBroadcast: false", self.ui)
+        self.assertIn("priceBroadcast:false", self.ui)
+        self.assertIn("candleBroadcast:false", self.ui)
 
     def test_add_price_alert_appends_all(self) -> None:
-        self.assertIn("const all   = S.priceBroadcast ? ' --all' : '';", self.ui)
-        self.assertIn("${notes ? ' ' + notes : ''}${all}", self.ui)
+        self.assertIn("S.priceBroadcast?' --all':''", self.ui)
 
     def test_add_candle_alert_appends_all(self) -> None:
-        self.assertIn("const all  = S.candleBroadcast ? ' --all' : '';", self.ui)
-        self.assertIn("${note ? ' ' + note : ''}${all}", self.ui)
+        self.assertIn("S.candleBroadcast?' --all':''", self.ui)
 
     def test_live_previews_append_all(self) -> None:
-        # The "Will copy" previews must reflect the toggle too.
-        self.assertIn("${S.priceBroadcast ? ' --all' : ''}", self.ui)
-        self.assertIn("${S.candleBroadcast ? ' --all' : ''}", self.ui)
+        # Unlike the old page, priceCmd/candleCmd are the single source for
+        # both the preview and the copied value, so the --all flag must
+        # appear in the same builder used by both.
+        self.assertIn("S.priceBroadcast?' --all':''", self.ui)
+        self.assertIn("S.candleBroadcast?' --all':''", self.ui)
 
-    def test_mult_control_present_in_ui(self) -> None:
-        # Bug 3: the UI must expose the "Smart SL in-between" multiplier
-        # so traders can emit x2..x4 on /m and /p.
-        self.assertIn("Lot multiplier", self.ui)
-        self.assertIn("adj('mult'", self.ui)
-        self.assertIn("S.mult > 1", self.ui)
-        self.assertIn("'x' + S.mult", self.ui)
+    def test_smart_sl_field_present(self) -> None:
+        # Bug was: the only smart-SL control was a opaque x-multiplier. The
+        # minimal UI exposes an exact smart-SL price input instead.
+        self.assertIn('id="smart-sl"', self.ui)
 
-    def test_mult_control_present_in_builder(self) -> None:
-        builder = BUILDER_PATH.read_text(encoding="utf-8")
-        self.assertIn("Lot multiplier", builder)
-        self.assertIn("adj('mult'", builder)
-        self.assertIn("S.mult > 1", builder)
-        self.assertIn("parts.push('x' + S.mult)", builder)
-        self.assertIn("cmd += ` x${S.mult}`", builder)
+    def test_smart_sl_flag_emitted_on_trade(self) -> None:
+        self.assertIn("base.push('--smart-sl',ss)", self.ui)
+        self.assertIn("const ss=$('smart-sl').value", self.ui)
+
+    def test_smart_sl_risk_readout_present(self) -> None:
+        # The UI shows the risk at the smart stop (pending orders) or says
+        # the bot reports it (market orders where the fill is unknown).
+        self.assertIn("Risk at smart SL:", self.ui)
+        self.assertIn("bot reports it", self.ui)
+
+    def test_no_multiplier_control_remains(self) -> None:
+        # The x-multiplier spelling was removed from the bot and the UI.
+        self.assertNotIn("Lot multiplier", self.ui)
+        self.assertNotIn("adj('mult'", self.ui)
+        self.assertNotIn("S.mult", self.ui)
+        self.assertNotIn("x-mult", self.ui)
+
+    def test_builders_all_present(self) -> None:
+        # All three builders must remain: trade (/m,/p), price alert, candle alert.
+        self.assertIn('id="trade-cmd"', self.ui)
+        self.assertIn('id="palrt-cmd"', self.ui)
+        self.assertIn('id="calrt-cmd"', self.ui)
 
 
 if __name__ == "__main__":

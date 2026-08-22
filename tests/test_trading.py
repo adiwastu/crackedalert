@@ -240,6 +240,42 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["stopLoss"], 2395.0)
         self.assertEqual(sent["takeProfit"], 2415.8)   # 2400.2 + 5.2*3
 
+    def test_market_smart_sl_places_exact_stop(self):
+        # bid 2449.8 / ask 2450.0, SL 2440 -> fill 2450 (ask), smart 2445
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.5, account="demo", smart_sl=2445.0)
+        plan, symbol, result, lots = run(self.service.execute(args, True))
+        sent = self.cli.orders[0]
+        self.assertEqual(sent["stopLoss"], 2445.0)
+        self.assertEqual(sent["takeProfit"], 2470.0)   # 2450 + 10*2
+        self.assertIsNotNone(plan.smart_risk_pct)
+
+    def test_market_smart_sl_out_of_range_rejected(self):
+        # smart 2435 is BEYOND the original SL 2440 (outside the fill-SL band)
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.5, account="demo", smart_sl=2435.0)
+        with self.assertRaises(trading.TradeRejected) as cm:
+            run(self.service.execute(args, True))
+        self.assertIn("smart SL", str(cm.exception))
+        self.assertEqual(self.cli.orders, [])    # no order placed
+
+    def test_market_smart_sl_at_fill_rejected(self):
+        # smart == fill (2450) gives zero smart distance -> not strictly between
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.5, account="demo", smart_sl=2450.0)
+        with self.assertRaises(trading.TradeRejected) as cm:
+            run(self.service.execute(args, True))
+        self.assertIn("smart SL", str(cm.exception))
+
+    def test_pending_smart_sl_places_exact_stop(self):
+        # entry 2400, sl 2395, fill 2400.2, smart 2398.5
+        args = TradeArgs(entry=2400.0, sl=2395.0, widen=False, rr=3,
+                         risk_pct=1, account="demo", smart_sl=2398.5)
+        plan, symbol, result, lots = run(self.service.execute(args, False))
+        sent = self.cli.orders[0]
+        self.assertEqual(sent["stopLoss"], 2398.5)
+        self.assertEqual(sent["takeProfit"], 2415.8)   # 2400.2 + 5.2*3
+
     def test_dollar_risk_executes_exact_amount(self):
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
                          risk_pct=0.0, account="demo", risk_usd=50.0)

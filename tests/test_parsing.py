@@ -161,6 +161,48 @@ class TradeParsing(unittest.TestCase):
         with self.assertRaises(handlers.ParseError):
             handlers.parse_trade("/m 2440.00 y 2 $abc demo", is_market=True)
 
+    def test_market_smart_sl(self):
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k --smart-sl 2435",
+                                 is_market=True)
+        self.assertAlmostEqual(t.smart_sl, 2435.0)
+        self.assertIsNone(t.cc_timeframe)
+
+    def test_pending_smart_sl(self):
+        t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k --smart-sl 2445",
+                                 is_market=False)
+        self.assertAlmostEqual(t.smart_sl, 2445.0)
+
+    def test_smart_sl_short_alias(self):
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k -ss 2435",
+                                 is_market=True)
+        self.assertAlmostEqual(t.smart_sl, 2435.0)
+
+    def test_smart_sl_with_cc_guard_and_all(self):
+        t = handlers.parse_trade(
+            "/m 2440 y 2 0.5 10k --smart-sl 2435 M15 4080 --all",
+            is_market=True)
+        self.assertAlmostEqual(t.smart_sl, 2435.0)
+        self.assertEqual(t.cc_timeframe, "M15")
+        self.assertEqual(t.cc_price, 4080.0)
+        self.assertTrue(t.broadcast)
+
+    def test_smart_sl_missing_price_raises(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k --smart-sl",
+                                 is_market=True)
+
+    def test_smart_sl_bad_number_raises(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k --smart-sl abc",
+                                 is_market=True)
+
+    def test_old_xmult_is_rejected(self):
+        # x2-style smart multiplier is no longer a valid trailing token; a
+        # bare trailing value that's not --smart-sl falls through to the CC
+        # guard parser and errors.
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k x2", is_market=True)
+
     def test_market_with_cc_guard(self):
         t = handlers.parse_trade("/m 2440 y 2 0.5 10k M15 4080",
                                  is_market=True)

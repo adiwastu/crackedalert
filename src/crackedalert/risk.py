@@ -32,8 +32,8 @@ class TradePlan:
     risk_usd: float
     widen_label: str          # "" or WIDEN_LABEL
     spread: float
-    mult: float = 1.0         # smart-SL lot multiplier (>1 tightens SL)
-    sl_label: str = ""        # "" or " (x2)" etc.
+    smart_sl: Optional[float] = None  # exact smart-stop price, or None
+    smart_risk_pct: Optional[float] = None  # risk at the smart stop, if any
 
 
 def _lots(risk_usd: float, dist: float, usd_per_point_per_lot: float,
@@ -47,19 +47,12 @@ def _lots(risk_usd: float, dist: float, usd_per_point_per_lot: float,
     return round(floored, 8)
 
 
-def _format_mult(mult: float) -> str:
-    """Render the x-multiplier label: 1 -> '', 2.0 -> '2', 2.5 -> '2.5'."""
-    if mult <= 1.0:
-        return "1"
-    return str(int(mult)) if float(mult).is_integer() else str(mult)
-
-
 def _build(direction: str, order_kind: str, entry_ref: float,
            placement_price: Optional[float], sl: float, widen: bool,
            rr: float, risk_pct: float, balance: float, spread: float,
            usd_per_point_per_lot: float, min_lots: float,
            lot_step: float, risk_usd_override: Optional[float] = None,
-           basis: Optional[float] = None, mult: float = 1.0
+           basis: Optional[float] = None, smart_sl: Optional[float] = None
            ) -> TradePlan:
     widen_label = ""
     if widen:
@@ -79,24 +72,25 @@ def _build(direction: str, order_kind: str, entry_ref: float,
     else:
         risk_usd = balance * (risk_pct / 100.0)
 
-    # Smart SL (x<mult>): the stop sits INBETWEEN the entry and the original
-    # SL, tightened by the multiplier. Same dollar risk buys mult x the lots
-    # (raw = risk / (dist/m * usdppl)); TP and the original entry-SL
-    # distance (dist) are unchanged, so the effective RR becomes rr * mult.
-    sl_label = ""
-    smart_dist = dist
-    if mult > 1.0:
-        smart_dist = dist / mult
-        sl = basis - smart_dist if direction == BUY else basis + smart_dist
-        sl_label = " (x%s)" % _format_mult(mult)
-    lots = _lots(risk_usd, smart_dist, usd_per_point_per_lot,
+    # Lots are ALWAYS sized off the original SL distance, so the stated
+    # "risk%" is the loss if price reaches the original SL. An exact smart
+    # SL price only moves where the stop sits: it must be between the fill
+    # (basis) and the original SL, and the exposure there is the same
+    # risk% scaled by smart_dist/dist.
+    if smart_sl is not None:
+        smart_dist = abs(basis - smart_sl)
+        smart_risk_pct = risk_pct * (smart_dist / dist)
+        sl = smart_sl  # place the stop exactly at the requested price
+    else:
+        smart_risk_pct = None
+    lots = _lots(risk_usd, dist, usd_per_point_per_lot,
                  min_lots, lot_step)
 
     return TradePlan(
         direction=direction, order_kind=order_kind, entry_ref=entry_ref,
         placement_price=placement_price, sl=sl, tp=tp, dist=dist, lots=lots,
         risk_usd=risk_usd, widen_label=widen_label, spread=spread,
-        mult=mult, sl_label=sl_label)
+        smart_sl=smart_sl, smart_risk_pct=smart_risk_pct)
 
 
 def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,
@@ -105,7 +99,7 @@ def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,
                 min_lots: float = 0.01,
                 lot_step: float = 0.01,
                 risk_usd: Optional[float] = None,
-                mult: float = 1.0) -> TradePlan:
+                smart_sl: Optional[float] = None) -> TradePlan:
     """Market order: entry reference is the side MT5/cTrader actually fills.
 
     Direction is inferred against the mid-price (bash parity), then the
@@ -114,8 +108,10 @@ def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,
     risk_usd overrides the percentage-based risk (dollar mode): when set,
     risk_pct is ignored and the exact dollar amount is used.
 
-    mult (smart SL) > 1 tightens the stop to entry -/+ dist/mult, sizing
-    mult x the lots for the same dollar risk; see TradePlan docs.
+    smart_sl (exact smart-stop price) places the stop exactly there; it
+    must sit between the fill and the original SL. Lots stay anchored to
+    the original SL distance, so the risk at the smart stop is
+    risk_pct * smart_dist/dist; see TradePlan docs.
     """
     mid = (bid + ask) / 2.0
     direction = BUY if sl < mid else SELL
@@ -123,7 +119,7 @@ def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,
     return _build(direction, MARKET, entry_ref, None, sl, widen, rr,
                   risk_pct, balance, ask - bid,
                   usd_per_point_per_lot, min_lots, lot_step,
-                  risk_usd_override=risk_usd, mult=mult)
+                  risk_usd_override=risk_usd, smart_sl=smart_sl)
 
 
 def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
@@ -132,7 +128,7 @@ def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
                  min_lots: float = 0.01,
                  lot_step: float = 0.01,
                  risk_usd: Optional[float] = None,
-                 mult: float = 1.0) -> TradePlan:
+                 smart_sl: Optional[float] = None) -> TradePlan:
     """Pending order: placement price is spread-offset (BUY above, SELL
     below); LIMIT/STOP inferred from where the placement price sits relative
     to the current book. SL/TP/dist/lots are computed off the placement
@@ -141,8 +137,10 @@ def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
     risk_usd overrides the percentage-based risk (dollar mode): when set,
     risk_pct is ignored and the exact dollar amount is used.
 
-    mult (smart SL) > 1 tightens the stop to entry -/+ dist/mult, sizing
-    mult x the lots for the same dollar risk; see TradePlan docs.
+    smart_sl (exact smart-stop price) places the stop exactly there; it
+    must sit between the fill and the original SL. Lots stay anchored to
+    the original SL distance, so the risk at the smart stop is
+    risk_pct * smart_dist/dist; see TradePlan docs.
     """
     direction = BUY if sl < entry else SELL
     spread = ask - bid
@@ -157,4 +155,5 @@ def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
     return _build(direction, order_kind, entry, placement, sl, widen, rr,
                   risk_pct, balance, spread,
                   usd_per_point_per_lot, min_lots, lot_step,
-                  risk_usd_override=risk_usd, basis=placement, mult=mult)
+                  risk_usd_override=risk_usd, basis=placement,
+                  smart_sl=smart_sl)

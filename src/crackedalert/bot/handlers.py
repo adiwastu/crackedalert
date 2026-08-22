@@ -53,7 +53,7 @@ class TradeArgs:
     risk_usd: Optional[float] = None   # dollar amount, $ prefix; else pct
     cc_timeframe: Optional[str] = None   # e.g. "M15"; None = no guard
     cc_price: Optional[float] = None
-    mult: float = 1.0          # smart-SL lot multiplier (trailing x2), 1 = off
+    smart_sl: Optional[float] = None      # exact smart-stop price; None = stop at original SL
     broadcast: bool = False
 
 
@@ -90,24 +90,22 @@ def parse_alert(text: str, default_symbol: str,
                      broadcast=broadcast)
 
 
-MULT_RE = re.compile(r"^x(\d+(?:\.\d+)?)$")
-
-
 def parse_trade(text: str, is_market: bool) -> TradeArgs:
-    """/m <sl> <widen> <rr> <risk%> <account> [x<mult>] [<tf> <guard_price>] [--all]
-       /p <entry> <sl> <widen> <rr> <risk%> <account> [x<mult>] [<tf> <guard_price>] [--all]
-    <mult> (smart SL) tightens the stop to entry -/+ dist/mult, sizing
-    mult x the lots for the same dollar risk. A trailing x<mult> must sit
-    right after the account (before the optional CC guard pair / --all).
+    """/m <sl> <widen> <rr> <risk%> <account> [--smart-sl <price>] [<tf> <guard_price>] [--all]
+       /p <entry> <sl> <widen> <rr> <risk%> <account> [--smart-sl <price>] [<tf> <guard_price>] [--all]
+    --smart-sl <price> places the stop exactly at <price> (must sit between
+    the fill and the original SL). Lots always anchor to the original SL, so
+    the risk at the smart stop is the stated risk% scaled by the distance
+    ratio. It may appear before the optional CC guard pair / --all.
     """
     tokens = text.split()[1:]
     broadcast = _pop_broadcast(tokens)
     base = 5 if is_market else 6
-    if len(tokens) not in (base, base + 1, base + 2, base + 3):
+    if len(tokens) not in (base, base + 1, base + 2, base + 3, base + 4):
         raise ParseError(
-            "expected %d arguments (or %d with x-mult / %d with CC guard "
-            "/ %d with both), got %d"
-            % (base, base + 1, base + 2, base + 3, len(tokens)))
+            "expected %d arguments (or %d with --smart-sl / %d with CC guard "
+            "/ %d with both / %d with both+smart-sl), got %d"
+            % (base, base + 1, base + 2, base + 3, base + 4, len(tokens)))
     try:
         if is_market:
             entry = None
@@ -144,19 +142,21 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
     if risk_usd is not None and risk_usd <= 0:
         raise ParseError("risk amount must be positive")
 
-    # Optional smart-SL multiplier: x2 / x2.5 straight after the account.
-    mult = 1.0
-    next_idx = base
-    if next_idx < len(tokens) and MULT_RE.match(tokens[next_idx]):
-        mult = float(MULT_RE.match(tokens[next_idx]).group(1))
-        if mult < 1.0:
-            raise ParseError("x-mult must be >= 1")
-        next_idx += 1
+    # Optional exact smart-SL price: --smart-sl <price> (or -ss <price>).
+    rest = tokens[base:]
+    smart_sl = None
+    if rest and rest[0].lower() in ("--smart-sl", "-ss", "--smartsl"):
+        if len(rest) < 2:
+            raise ParseError("expected a price after --smart-sl")
+        try:
+            smart_sl = float(rest[1])
+        except ValueError:
+            raise ParseError("smart SL price is not a number")
+        rest = rest[2:]
 
     # CC guard (optional)
     cc_timeframe = None
     cc_price = None
-    rest = tokens[next_idx:]
     if rest:
         if len(rest) != 2:
             raise ParseError("expected optional CC guard as a tf+price pair")
@@ -172,7 +172,7 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
 
     return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
                      rr=rr, risk_pct=risk_pct, account=account,
-                     risk_usd=risk_usd, mult=mult,
+                     risk_usd=risk_usd, smart_sl=smart_sl,
                      cc_timeframe=cc_timeframe, cc_price=cc_price,
                      broadcast=broadcast)
 
@@ -667,7 +667,7 @@ class Handlers:
             sl=plan.sl, tp=plan.tp, rr=args.rr,
             widen_label=plan.widen_label, digits=symbol.digits,
             dollar_risk=args.risk_usd is not None,
-            sl_label=plan.sl_label))
+            smart_sl=plan.smart_sl, smart_risk_pct=plan.smart_risk_pct))
 
         if is_market:
             # Market fills are already in: the engine's entry alert would
