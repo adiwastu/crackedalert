@@ -96,6 +96,7 @@ class CTraderClient:
         self._ready = asyncio.Event()
         self._stopped = False
         self._runner: Optional[asyncio.Task] = None
+        self._req_lock = asyncio.Lock()
         # (payloadType, clientMsgId, payload keys) of the last few frames;
         # dumped into timeout errors so a silent gateway is diagnosable.
         self._recent_frames = collections.deque(maxlen=10)
@@ -142,7 +143,18 @@ class CTraderClient:
 
         Returns (payloadType, payload). Raises CTraderError on protocol
         errors, NotConnected if the link is down or drops mid-flight.
+
+        Requests are serialized per client (never two in flight): the
+        bot's candle poll (every 10s), entry-alert confirm reconciles,
+        and /m flows share one connection, and the gateway has been
+        observed dropping a request sent while another is outstanding.
         """
+        async with self._req_lock:
+            return await self._request_unlocked(payload_type, payload,
+                                                timeout)
+
+    async def _request_unlocked(self, payload_type: int, payload: dict,
+                                timeout: float) -> Tuple[int, dict]:
         ws = self._ws
         if ws is None:
             raise NotConnected("cTrader %s link is down" % self.environment)

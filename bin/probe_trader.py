@@ -323,6 +323,67 @@ async def run_variant(env, token, account_id, with_token):
         print("  (the full poison hunt + dual-connection test follow)")
 
 
+async def await_multi(ws, msg_ids, seconds, label):
+    """Collect frames until ALL msg_ids are seen (or timeout); returns a
+    dict {msg_id: frame-or-None}."""
+    remaining = set(msg_ids)
+    out = {}
+    end = time.monotonic() + seconds
+    while time.monotonic() < end and remaining:
+        frame = await recv_until(ws, end)
+        if frame is None:
+            break
+        m = frame.get("clientMsgId")
+        if m in remaining:
+            remaining.discard(m)
+            out[m] = frame
+            print("  %s: %s" % (label, fmt(frame)))
+    for m in remaining:
+        out[m] = None
+        print("  %s: %s NO RESPONSE (silence)" % (label, m))
+    return out
+
+
+async def run_concurrent(env, token, account_id):
+    """Send requests back-to-back WITHOUT awaiting between them, like the
+    bot's session under the 10s candle poll and entry-alert reconciles.
+    Does the gateway drop the second request?"""
+    ctx = ssl.create_default_context()
+    import websockets
+    print("\n=== CONCURRENT REQUESTS (no await between sends) ===")
+    async with websockets.connect(HOST, ssl=ctx, ping_interval=None) as ws:
+        hb = asyncio.get_running_loop().create_task(_heartbeat(ws))
+        if not await auth_ws(ws, env, token, account_id, "c"):
+            return
+        await send(ws, "c-sub", PT_SUBSCRIBE_SPOTS_REQ, {
+            "ctidTraderAccountId": account_id, "symbolId": [SYMBOL_ID]})
+        await await_msg(ws, "c-sub", 8, "subscribe", quiet=True)
+
+        # 1) trendbar + trader back-to-back (candle poll overlaps /m)
+        await send(ws, "c-tb", PT_GET_TRENDBARS_REQ, {
+            "ctidTraderAccountId": account_id, "symbolId": SYMBOL_ID,
+            "period": "M15", "toTimestamp": int(time.time() * 1000),
+            "count": 3})
+        await send(ws, "c-t1", PT_TRADER_REQ,
+                   {"ctidTraderAccountId": account_id})
+        res = await await_multi(ws, ("c-tb", "c-t1"), 8, "trendbar+trader")
+        print("  => trendbar back-to-back: %s" % (
+            "ANSWERED" if res.get("c-tb") else "SILENT"))
+        print("  => trader back-to-back: %s" % (
+            "ANSWERED" if res.get("c-t1") else "SILENT"))
+
+        # 2) reconcile + trader back-to-back (entry-alert confirms overlap)
+        await send(ws, "c-r1", PT_RECONCILE_REQ,
+                   {"ctidTraderAccountId": account_id})
+        await send(ws, "c-t2", PT_TRADER_REQ,
+                   {"ctidTraderAccountId": account_id})
+        res2 = await await_multi(ws, ("c-r1", "c-t2"), 8, "reconcile+trader")
+        print("  => reconcile back-to-back: %s" % (
+            "ANSWERED" if res2.get("c-r1") else "SILENT"))
+        print("  => trader back-to-back: %s" % (
+            "ANSWERED" if res2.get("c-t2") else "SILENT"))
+
+
 def live_account(env):
     try:
         accs = json.loads(env.get("CTRADER_ACCOUNTS", "{}"))
@@ -358,6 +419,7 @@ def main():
         asyncio.run(run_dual(env, token, demo_id, live_id))
     else:
         print("\nno live account in CTRADER_ACCOUNTS -- skipping dual test")
+    asyncio.run(run_concurrent(env, token, demo_id))
     return 0
 
 
