@@ -23,7 +23,14 @@ button:focus-visible{outline:3px solid #ffdd00;outline-offset:-2px}
 .seg button.active{background:#111;color:#fff}
 </style>
 
-<h1>Cracked Alert <b>v2.0.13</b></h1>
+<h1>Cracked Alert <b>v2.0.17</b></h1>
+
+<datalist id="note-presets">
+  <option value="ChoCh">
+  <option value="BoS">
+  <option value="LTF ChoCh">
+  <option value="LTF BoS">
+</datalist>
 
 <script>
 const S={orderType:'market',acct:'live100k',rr:2,risk:0.5,widen:'n',priceBroadcast:false,candleBroadcast:false};
@@ -117,7 +124,7 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
     <button onclick="seg(this,function(){$('form-price').style.display='none';$('form-candle').style.display='';});">Candle close</button>
   </div>
   <div id="form-price">
-    <div class="row"><div><label>Price</label><input id="a-price" type="number" step="0.01" placeholder="2450.00" oninput="refresh()"></div><div><label>Notes</label><select id="a-notes" onchange="refresh()"><option value="">—</option><option>ChoCh</option><option>BoS</option><option>LTF ChoCh</option><option>LTF BoS</option></select></div></div>
+    <div class="row"><div><label>Price</label><input id="a-price" type="number" step="0.01" placeholder="2450.00" oninput="refresh()"></div><div><label>Notes</label><input id="a-notes" list="note-presets" placeholder="ChoCh, BoS, LTF ChoCh, LTF BoS or type your own" oninput="refresh()"></div></div>
     <div class="inline"><input id="pa-all" type="checkbox" onchange="S.priceBroadcast=this.checked;refresh()"><label for="pa-all">Alert all subscribers (--all)</label></div>
     <div class="cmd" id="palrt-cmd"></div>
     <button onclick="copy(priceCmd(),$('palrt-cmd'))">Copy</button>
@@ -129,7 +136,7 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
       <div><label>Symbol</label><input id="cc-sym" type="text" value="XAUUSD" oninput="refresh()"></div>
     </div>
     <label>Price</label><input id="cc-price" type="number" step="0.01" placeholder="2450.00" oninput="refresh()">
-    <label>Notes</label><select id="cc-note" onchange="refresh()"><option value="">—</option><option>ChoCh</option><option>BoS</option><option>LTF ChoCh</option><option>LTF BoS</option></select>
+    <label>Notes</label><input id="cc-note" list="note-presets" placeholder="ChoCh, BoS, LTF ChoCh, LTF BoS or type your own" oninput="refresh()">
     <div class="inline"><input id="ca-all" type="checkbox" onchange="S.candleBroadcast=this.checked;refresh()"><label for="ca-all">Alert all subscribers (--all)</label></div>
     <div class="cmd" id="calrt-cmd"></div>
     <button onclick="copy(candleCmd(),$('calrt-cmd'))">Copy</button>

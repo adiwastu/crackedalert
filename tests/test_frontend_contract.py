@@ -74,6 +74,16 @@ class FrontendContractTest(unittest.TestCase):
         self.assertNotIn("S.mult", self.ui)
         self.assertNotIn("x-mult", self.ui)
 
+    def test_notes_presets_datalist_present(self) -> None:
+        # Notes fields are type-or-pick: a datalist offers the four presets
+        # while still allowing free text.
+        self.assertIn('id="note-presets"', self.ui)
+        self.assertIn('<option value="ChoCh">', self.ui)
+        self.assertIn('<option value="BoS">', self.ui)
+        self.assertIn('<option value="LTF ChoCh">', self.ui)
+        self.assertIn('<option value="LTF BoS">', self.ui)
+        self.assertIn('list="note-presets"', self.ui)
+
     def test_builders_all_present(self) -> None:
         # All three builders must remain: trade (/m,/p), price alert, candle alert.
         self.assertIn('id="trade-cmd"', self.ui)
