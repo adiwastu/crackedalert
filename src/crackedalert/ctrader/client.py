@@ -174,7 +174,16 @@ class CTraderClient:
         ctx = ssl.create_default_context()
         while not self._stopped:
             try:
-                async with websockets.connect(self._url, ssl=ctx) as ws:
+                # ping_interval=None: the cTrader gateway does not answer
+                # WebSocket-protocol keepalive pings -- its liveness protocol
+                # is the app-level ProtoOA heartbeat we send every 8s. The
+                # websockets library's default keepalive (ping every 20s,
+                # 20s timeout) therefore killed the connection every
+                # ~10-35 min with 1011 "keepalive ping timeout", and requests
+                # sent during the dead-but-not-closed window (e.g. the
+                # balance TRADER request) were silently dropped.
+                async with websockets.connect(self._url, ssl=ctx,
+                                              ping_interval=None) as ws:
                     self._ws = ws
                     log.info("[%s] connected, authenticating app",
                              self.environment)
