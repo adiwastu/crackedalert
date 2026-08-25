@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Read-only cTrader gateway probe: why does PT_TRADER_REQ (2121) go unanswered?
+"""Read-only cTrader gateway probe: why does PT_TRADER_REQ (2121) go unanswered
+on the bot's long-lived session while fresh sessions answer it?
 
-Connects to the demo gateway in JSON mode, awaits account auth, then checks:
-  1. whether the target demo account is in the token's account grant
-     (PT_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ / 2149)
-  2. whether PT_TRADER_REQ (2121) answers with data, an error, or silence
-  3. same for PT_RECONCILE_REQ (2124) as a control
+Sequence per auth variant (WITH token is the one that matters):
+  auth -> trader (control) -> trendbar poll -> trader -> subscribe spots ->
+  trader -> reconcile (control)
 
-NEVER places orders -- account-info requests only.
+The bot's session differs from the smoke test's fresh session by doing
+trendbar polls and spot subscriptions; this finds which one (if any)
+makes the gateway stop answering 2121. NEVER places orders.
 
 Usage (on the VPS):
     sudo /opt/crackedalert/venv/bin/python3 bin/probe_trader.py
@@ -35,6 +36,10 @@ PT_TRADER_REQ = 2121
 PT_TRADER_RES = 2122
 PT_RECONCILE_REQ = 2124
 PT_RECONCILE_RES = 2125
+PT_SUBSCRIBE_SPOTS_REQ = 2127
+PT_SUBSCRIBE_SPOTS_RES = 2128
+PT_GET_TRENDBARS_REQ = 2137
+PT_GET_TRENDBARS_RES = 2138
 PT_GET_ACCOUNTS_REQ = 2149
 PT_GET_ACCOUNTS_RES = 2150
 PT_ERROR_RES = 2142
@@ -45,9 +50,16 @@ NAME = {
     2104: "VERSION_REQ", 2105: "VERSION_RES",
     2121: "TRADER_REQ", 2122: "TRADER_RES",
     2124: "RECONCILE_REQ", 2125: "RECONCILE_RES",
-    2131: "SPOT_EVENT", 2142: "ERROR_RES",
+    2127: "SUBSCRIBE_REQ", 2128: "SUBSCRIBE_RES",
+    2131: "SPOT_EVENT", 2137: "TRENDBARS_REQ", 2138: "TRENDBARS_RES",
+    2142: "ERROR_RES",
     2149: "GET_ACCOUNTS_REQ", 2150: "GET_ACCOUNTS_RES",
 }
+
+# XAUUSD symbol id on the demo account (from the bot's own logs).
+SYMBOL_ID = 41
+# Payload types too noisy to print (streamed continuously).
+QUIET = {51, 2131}
 
 
 def load_env():
@@ -126,7 +138,7 @@ async def recv_until(ws, deadline):
         return None    # timeout or connection closed
 
 
-async def await_msg(ws, msg_id, seconds, label):
+async def await_msg(ws, msg_id, seconds, label, quiet=False):
     """Collect frames until the correlated response for msg_id arrives
     (or a correlated error), printing everything meanwhile."""
     end = time.monotonic() + seconds
@@ -136,14 +148,28 @@ async def await_msg(ws, msg_id, seconds, label):
             print("  %s: NO RESPONSE within %.0fs (silence)"
                   % (label, seconds))
             return None
-        line = fmt(frame)
-        print("  %s: %s" % (label, line))
+        if not quiet and frame.get("payloadType") not in QUIET:
+            print("  %s: %s" % (label, fmt(frame)))
         if frame.get("clientMsgId") == msg_id:
             if frame.get("payloadType") == PT_ERROR_RES:
                 print("  %s: gateway ANSWERED with an error" % label)
             return frame
     print("  %s: NO RESPONSE within %.0fs (silence)" % (label, seconds))
     return None
+
+
+async def probe_trader(ws, account_id, seq, seconds=8):
+    """One TRADER_REQ step; returns the correlated frame or None."""
+    msg_id = "p-t%d" % seq
+    await send(ws, msg_id, PT_TRADER_REQ,
+               {"ctidTraderAccountId": account_id})
+    frame = await await_msg(ws, msg_id, seconds,
+                            "trader #%d" % seq, quiet=True)
+    print("  => trader #%d: %s" % (
+        seq, "ANSWERED (%s)" % NAME.get(
+            frame.get("payloadType"), frame.get("payloadType"))
+        if frame else "SILENT"))
+    return frame
 
 
 async def run_variant(env, token, account_id, with_token):
@@ -194,8 +220,6 @@ async def run_variant(env, token, account_id, with_token):
             frame = await recv_until(ws, end)
             if frame is None:
                 break
-            line = fmt(frame)
-            print("  account-list:", line)
             if frame.get("clientMsgId") == "p-accs":
                 accounts = frame.get("payload", {}).get(
                     "ctidTraderAccount", [])
@@ -205,21 +229,40 @@ async def run_variant(env, token, account_id, with_token):
                      if int(a.get("ctidTraderAccountId", 0)) == account_id]
             print("  GRANT: token sees %d account(s); demo %d in grant: %s"
                   % (len(accounts), account_id, bool(found)))
-            for a in accounts[:10]:
-                print("    account %s login=%s live=%s" % (
-                    a.get("ctidTraderAccountId"), a.get("traderLogin"),
-                    a.get("isLive")))
         else:
             print("  GRANT: no account-list response (silence)")
 
-        # 3) TRADER and RECONCILE, each awaited on its own.
-        await send(ws, "p-trader", PT_TRADER_REQ,
-                   {"ctidTraderAccountId": account_id})
-        trader = await await_msg(ws, "p-trader", 8, "trader")
-        await send(ws, "p-recon", PT_RECONCILE_REQ,
-                   {"ctidTraderAccountId": account_id})
-        await await_msg(ws, "p-recon", 8, "reconcile")
-        print("  RESULT: trader answered=%s" % (trader is not None))
+        # 3) Poison hunt (with-token variant only): which session request
+        #    makes the gateway stop answering 2121?
+        if with_token:
+            await probe_trader(ws, account_id, 1)      # control
+
+            await send(ws, "p-tb", PT_GET_TRENDBARS_REQ, {
+                "ctidTraderAccountId": account_id,
+                "symbolId": SYMBOL_ID, "period": "M15",
+                "toTimestamp": int(time.time() * 1000), "count": 100,
+            })
+            await await_msg(ws, "p-tb", 8, "trendbar", quiet=True)
+            print("  => trendbar poll: done")
+            await probe_trader(ws, account_id, 2)      # after trendbar
+
+            await send(ws, "p-sub", PT_SUBSCRIBE_SPOTS_REQ, {
+                "ctidTraderAccountId": account_id,
+                "symbolId": [SYMBOL_ID],
+            })
+            await await_msg(ws, "p-sub", 8, "subscribe", quiet=True)
+            print("  => spot subscription: done")
+            await probe_trader(ws, account_id, 3)      # after subscribe
+
+            await send(ws, "p-recon", PT_RECONCILE_REQ,
+                       {"ctidTraderAccountId": account_id})
+            r = await await_msg(ws, "p-recon", 8, "reconcile", quiet=True)
+            print("  => reconcile control: %s"
+                  % ("ANSWERED" if r else "SILENT"))
+        else:
+            await send(ws, "p-trader", PT_TRADER_REQ,
+                       {"ctidTraderAccountId": account_id})
+            await await_msg(ws, "p-trader", 8, "trader", quiet=True)
 
 
 def main():
