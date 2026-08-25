@@ -40,15 +40,13 @@ class EscapingTests(unittest.TestCase):
         self.assertNotIn("&#x27;", fmt.esc("it's"))
 
     def test_alert_message_with_special_chars_sends(self):
-        """alert_fired with a note full of HTML-significant characters
-        must render the escaped version inside the blockquote."""
+        """alert_fired returns the escaped note verbatim (no markup around
+        it anymore), so HTML-significant characters can never break
+        parse_mode=HTML."""
         raw_note = "break < 2440 & > 2430"
         a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_UP, raw_note)
         text = fmt.alert_fired(a)
-        blockquote_content = (
-            text.split("<blockquote>")[1].split("</blockquote>")[0])
-        expected = _html_esc(raw_note, quote=False)
-        self.assertEqual(blockquote_content, expected)
+        self.assertEqual(text, _html_esc(raw_note, quote=False))
 
     def test_esc_idempotent_on_already_escaped(self):
         """If a value arrives pre-escaped, esc() double-escapes it.
@@ -77,28 +75,24 @@ class HelpTextTests(unittest.TestCase):
 
 
 class AlertFiredTests(unittest.TestCase):
-    def test_alert_fired_contains_symbol_and_target(self):
-        a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_UP,
-                  "approaching demand")
-        text = fmt.alert_fired(a)
-        self.assertIn("XAUUSD", text)
-        self.assertIn("2450", text)
-        self.assertIn("AB12", text)
+    """alert_fired is notes-only; fallback 'price hit <target>'."""
 
-    def test_alert_fired_up_arrow(self):
-        a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_UP, "note")
+    def test_alert_fired_notes_only(self):
+        a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_UP, "ChoCh")
         text = fmt.alert_fired(a)
-        self.assertIn("\U0001F53A", text)
+        self.assertEqual(text, "ChoCh")
 
-    def test_alert_fired_down_arrow(self):
-        a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_DOWN, "note")
+    def test_alert_fired_no_notes_price_hit(self):
+        a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_UP, "")
         text = fmt.alert_fired(a)
-        self.assertIn("\U0001F53B", text)
+        self.assertEqual(text, "price hit 2450")
 
-    def test_alert_fired_has_blockquote(self):
-        a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_UP, "my note")
+    def test_alert_fired_no_symbol_no_id(self):
+        a = Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_DOWN, "BoS")
         text = fmt.alert_fired(a)
-        self.assertIn("<blockquote>my note</blockquote>", text)
+        self.assertNotIn("XAUUSD", text)
+        self.assertNotIn("AB12", text)
+        self.assertNotIn("<blockquote>", text)
 
 
 class AlertSetTests(unittest.TestCase):
@@ -302,10 +296,15 @@ class CandleAlertTests(unittest.TestCase):
 
     def test_candle_alert_fired(self):
         a = CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
-                        CANDLE_BELOW, "note")
+                        CANDLE_BELOW, "LTF ChoCh")
         text = fmt.candle_alert_fired(a)
-        self.assertIn("AB12", text)
-        self.assertIn("XAUUSD M15 closed below 2450", text)
+        self.assertEqual(text, "LTF ChoCh")
+
+    def test_candle_alert_fired_no_notes(self):
+        a = CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
+                        CANDLE_BELOW, "")
+        text = fmt.candle_alert_fired(a)
+        self.assertEqual(text, "price hit 2450")
 
     def test_candle_alert_list(self):
         alerts = [CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,

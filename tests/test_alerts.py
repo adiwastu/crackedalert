@@ -86,14 +86,14 @@ class EngineTests(unittest.TestCase):
         self.store.close()
 
     def test_crossing_up_fires_at_or_above_target(self):
-        a = self.store.create(111, "XAUUSD", 2450.0,
-                              alerts.CROSSING_UP, "note")
+        self.store.create(111, "XAUUSD", 2450.0,
+                          alerts.CROSSING_UP, "note")
         run(self.engine.on_tick("XAUUSD", 2449.0, 2449.4))   # mid 2449.2
         self.assertEqual(self.sent, [])
         run(self.engine.on_tick("XAUUSD", 2449.9, 2450.3))   # mid 2450.1
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.sent[0][0], 111)
-        self.assertIn(a.id, self.sent[0][1])
+        self.assertEqual(self.sent[0][1], "note")   # notes-only message
         self.assertEqual(self.store.for_chat(111), [])       # deleted
 
     def test_crossing_down_fires_at_or_below_target(self):
@@ -146,7 +146,7 @@ class BroadcastEngineTests(unittest.TestCase):
         run(self.engine.on_tick("XAUUSD", 2450.0, 2450.4))
         self.assertEqual(len(self.broadcast), 1)
         self.assertEqual(self.sent, [])           # owner NOT notified
-        self.assertIn("2450", self.broadcast[0])
+        self.assertEqual(self.broadcast[0], "note")   # notes-only message
         self.assertEqual(self.store.for_chat(111), [])   # deleted
 
     def test_broadcast_failure_drops_alert(self):
@@ -276,13 +276,13 @@ class CandleEngineTests(unittest.TestCase):
         self.store.close()
 
     def test_above_fires_when_close_above_target(self):
-        a = self.store.create(111, "XAUUSD", "M15", 2450.0,
-                              alerts.CANDLE_ABOVE, "note")
+        self.store.create(111, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "note")
         run(self.engine.on_closed_bar("XAUUSD", "M15", 2449.0, 100))
         self.assertEqual(self.sent, [])
         run(self.engine.on_closed_bar("XAUUSD", "M15", 2450.5, 101))
         self.assertEqual(len(self.sent), 1)
-        self.assertIn(a.id, self.sent[0][1])
+        self.assertEqual(self.sent[0][1], "note")   # notes-only message
         self.assertEqual(self.store.for_chat(111), [])   # deleted
 
     def test_below_fires_when_close_below_target(self):

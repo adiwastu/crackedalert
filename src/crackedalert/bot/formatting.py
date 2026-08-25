@@ -64,20 +64,13 @@ def alert_set(alert: Alert, live_price: float) -> str:
 # --------------------------------------------------------------------------
 
 def alert_fired(alert: Alert) -> str:
-    up = "UP" in (getattr(alert, "direction", "") or "").upper()
-    arrow = "\U0001F53A" if up else "\U0001F53B"   # up / down triangle
+    """Fired message: just the notes. No price, id, or symbol.
 
-    lines = [
-        "%s <b>%s</b> hit <code>%s</code>" % (
-            arrow,
-            esc(getattr(alert, "symbol", None) or "?"),
-            esc(_trim(alert.target)),
-        )
-    ]
-    if getattr(alert, "message", None):
-        lines.append("<blockquote>%s</blockquote>" % esc(alert.message))
-    lines.append("<i>alert %s</i>" % esc(alert.id))
-    return "\n".join(lines)
+    Without notes, fall back to the minimal 'price hit <target>'."""
+    message = getattr(alert, "message", None)
+    if message:
+        return esc(message)
+    return "price hit %s" % esc(_trim(alert.target))
 
 
 # --------------------------------------------------------------------------
@@ -410,12 +403,11 @@ def candle_alert_set(alert: CandleAlert, last_close: Optional[float]) -> str:
 
 
 def candle_alert_fired(alert: CandleAlert) -> str:
-    direction = "above" if alert.direction == CANDLE_ABOVE else "below"
-    return ("cracked candle alert hit! (id:%s)\n"
-            "%s %s closed %s %s.\n"
-            "notes: %s"
-            % (esc(alert.id), esc(alert.symbol), esc(alert.timeframe),
-               esc(direction), _trim(alert.target), esc(alert.message)))
+    """Candle fired message: just the notes (same rule as alert_fired)."""
+    message = getattr(alert, "message", None)
+    if message:
+        return esc(message)
+    return "price hit %s" % esc(_trim(alert.target))
 
 
 def candle_alert_list(alerts: List[CandleAlert]) -> str:
