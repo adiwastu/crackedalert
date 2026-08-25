@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Read-only cTrader gateway probe: why does PT_TRADER_REQ (2121) go unanswered?
 
-Connects to the demo gateway in JSON mode and, for each account-auth variant
-(with and without the access token), sends PT_TRADER_REQ + PT_RECONCILE_REQ
-and prints EVERY frame received for ~12s (responses, errors, silence). Also
-queries the gateway version.
+Connects to the demo gateway in JSON mode, awaits account auth, then checks:
+  1. whether the target demo account is in the token's account grant
+     (PT_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ / 2149)
+  2. whether PT_TRADER_REQ (2121) answers with data, an error, or silence
+  3. same for PT_RECONCILE_REQ (2124) as a control
 
 NEVER places orders -- account-info requests only.
 
@@ -34,6 +35,8 @@ PT_TRADER_REQ = 2121
 PT_TRADER_RES = 2122
 PT_RECONCILE_REQ = 2124
 PT_RECONCILE_RES = 2125
+PT_GET_ACCOUNTS_REQ = 2149
+PT_GET_ACCOUNTS_RES = 2150
 PT_ERROR_RES = 2142
 
 NAME = {
@@ -43,6 +46,7 @@ NAME = {
     2121: "TRADER_REQ", 2122: "TRADER_RES",
     2124: "RECONCILE_REQ", 2125: "RECONCILE_RES",
     2131: "SPOT_EVENT", 2142: "ERROR_RES",
+    2149: "GET_ACCOUNTS_REQ", 2150: "GET_ACCOUNTS_RES",
 }
 
 
@@ -89,6 +93,9 @@ def fmt(frame):
         return "%s msg=%s ERROR %s: %s" % (
             name, msg, payload.get("errorCode"),
             payload.get("description"))
+    if pt == PT_VERSION_RES:
+        return "%s msg=%s version=%s" % (
+            name, msg, payload.get("version"))
     keys = sorted(payload.keys())
     return "%s msg=%s keys=%s" % (name, msg, keys[:8])
 
@@ -99,8 +106,7 @@ async def send(ws, msg_id, pt, payload):
 
 
 async def _heartbeat(ws):
-    """ProtoOA heartbeat every 8s so the gateway keeps the session alive
-    during the 12s probe window."""
+    """ProtoOA heartbeat every 8s so the gateway keeps the session alive."""
     while True:
         await asyncio.sleep(8)
         try:
@@ -113,8 +119,28 @@ async def recv_until(ws, deadline):
     try:
         return json.loads(await asyncio.wait_for(
             ws.recv(), max(0.1, deadline - time.monotonic())))
-    except asyncio.TimeoutError:
-        return None
+    except Exception:
+        return None    # timeout or connection closed
+
+
+async def await_msg(ws, msg_id, seconds, label):
+    """Collect frames until the correlated response for msg_id arrives
+    (or a correlated error), printing everything meanwhile."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        frame = await recv_until(ws, end)
+        if frame is None:
+            print("  %s: NO RESPONSE within %.0fs (silence)"
+                  % (label, seconds))
+            return None
+        line = fmt(frame)
+        print("  %s: %s" % (label, line))
+        if frame.get("clientMsgId") == msg_id:
+            if frame.get("payloadType") == PT_ERROR_RES:
+                print("  %s: gateway ANSWERED with an error" % label)
+            return frame
+    print("  %s: NO RESPONSE within %.0fs (silence)" % (label, seconds))
+    return None
 
 
 async def run_variant(env, token, account_id, with_token):
@@ -145,37 +171,52 @@ async def run_variant(env, token, account_id, with_token):
                 return
 
         await send(ws, "p-ver", PT_VERSION_REQ, {})
+
         payload = {"ctidTraderAccountId": account_id}
         if with_token:
             payload["accessToken"] = token
         await send(ws, "p-auth", PT_ACCT_AUTH_REQ, payload)
-        await send(ws, "p-trader", PT_TRADER_REQ,
-                   {"ctidTraderAccountId": account_id})
-        await send(ws, "p-recon", PT_RECONCILE_REQ,
-                   {"ctidTraderAccountId": account_id})
 
-        end = time.monotonic() + 12
-        trader_seen = recon_seen = auth_seen = False
+        # 1) AWAIT the account-auth outcome before any account-state request.
+        auth_frame = await await_msg(ws, "p-auth", 10, "acct-auth")
+        if auth_frame is None:
+            return
+
+        # 2) Account grant check: is our demo account visible to the token?
+        await send(ws, "p-accs", PT_GET_ACCOUNTS_REQ,
+                   {"accessToken": token})
+        end = time.monotonic() + 10
+        accounts = None
         while time.monotonic() < end:
             frame = await recv_until(ws, end)
             if frame is None:
                 break
             line = fmt(frame)
-            print("  ", line)
-            msg = frame.get("clientMsgId")
-            if msg == "p-trader":
-                trader_seen = True
-            if msg == "p-recon":
-                recon_seen = True
-            if msg == "p-auth":
-                auth_seen = True
-            if frame.get("payloadType") == PT_ERROR_RES and msg in (
-                    "p-trader", "p-recon"):
-                print("    ^ the gateway ANSWERED with an error for %s"
-                      % msg)
-        print("  RESULT: trader responded=%s reconcile responded=%s "
-              "auth responded=%s"
-              % (trader_seen, recon_seen, auth_seen))
+            print("  account-list:", line)
+            if frame.get("clientMsgId") == "p-accs":
+                accounts = frame.get("payload", {}).get(
+                    "ctidTraderAccount", [])
+                break
+        if accounts is not None:
+            found = [a for a in accounts
+                     if int(a.get("ctidTraderAccountId", 0)) == account_id]
+            print("  GRANT: token sees %d account(s); demo %d in grant: %s"
+                  % (len(accounts), account_id, bool(found)))
+            for a in accounts[:10]:
+                print("    account %s login=%s live=%s" % (
+                    a.get("ctidTraderAccountId"), a.get("traderLogin"),
+                    a.get("isLive")))
+        else:
+            print("  GRANT: no account-list response (silence)")
+
+        # 3) TRADER and RECONCILE, each awaited on its own.
+        await send(ws, "p-trader", PT_TRADER_REQ,
+                   {"ctidTraderAccountId": account_id})
+        trader = await await_msg(ws, "p-trader", 8, "trader")
+        await send(ws, "p-recon", PT_RECONCILE_REQ,
+                   {"ctidTraderAccountId": account_id})
+        await await_msg(ws, "p-recon", 8, "reconcile")
+        print("  RESULT: trader answered=%s" % (trader is not None))
 
 
 def main():
