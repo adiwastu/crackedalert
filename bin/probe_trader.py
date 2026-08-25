@@ -25,6 +25,7 @@ import time
 ENV_FILE = "/etc/cracked_alert/.env_cracked"
 TOKENS_FILE = "/etc/cracked_alert/tokens.json"
 HOST = "wss://demo.ctraderapi.com:5036"
+LIVE_HOST = "wss://live.ctraderapi.com:5036"
 
 PT_APP_AUTH_REQ = 2100
 PT_APP_AUTH_RES = 2101
@@ -178,6 +179,85 @@ async def probe_trader(ws, account_id, seq, seconds=8):
     return frame
 
 
+async def probe_trader_on(ws, account_id, msg_id, seconds=8):
+    """One TRADER_REQ step on a given connection; returns the frame or None."""
+    await send(ws, msg_id, PT_TRADER_REQ,
+               {"ctidTraderAccountId": account_id})
+    frame = await await_msg(ws, msg_id, seconds,
+                            "trader %s" % msg_id, quiet=True)
+    print("  => trader %s: %s" % (
+        msg_id, "ANSWERED (%s)" % NAME.get(
+            frame.get("payloadType"), frame.get("payloadType"))
+        if frame else "SILENT"))
+    return frame
+
+
+async def auth_ws(ws, env, token, account_id, prefix):
+    """App auth + account auth on one connection; returns True on success."""
+    await send(ws, "%s-app" % prefix, PT_APP_AUTH_REQ, {
+        "clientId": env["CTRADER_CLIENT_ID"],
+        "clientSecret": env["CTRADER_CLIENT_SECRET"],
+    })
+    end = time.monotonic() + 10
+    while time.monotonic() < end:
+        frame = await recv_until(ws, end)
+        if frame is None:
+            print("  [%s] app auth: no response" % prefix)
+            return False
+        if frame.get("payloadType") == PT_APP_AUTH_RES:
+            break
+        if frame.get("payloadType") == PT_ERROR_RES:
+            print("  [%s] app auth error" % prefix)
+            return False
+    await send(ws, "%s-auth" % prefix, PT_ACCT_AUTH_REQ, {
+        "ctidTraderAccountId": account_id, "accessToken": token})
+    auth = await await_msg(ws, "%s-auth" % prefix, 10, "%s acct-auth" % prefix)
+    return auth is not None
+
+
+async def run_dual(env, token, demo_id, live_id):
+    """Two concurrent connections (demo + live), like the bot. Does the
+    live session's presence break TRADER on the demo session?"""
+    ctx = ssl.create_default_context()
+    import websockets
+    print("\n=== DUAL CONNECTIONS (demo + live, like the bot) ===")
+    async with websockets.connect(HOST, ssl=ctx, ping_interval=None) as d, \
+            websockets.connect(LIVE_HOST, ssl=ctx, ping_interval=None) as l:
+        hb1 = asyncio.get_running_loop().create_task(_heartbeat(d))
+        hb2 = asyncio.get_running_loop().create_task(_heartbeat(l))
+        if not await auth_ws(d, env, token, demo_id, "d"):
+            return
+        if not await auth_ws(l, env, token, live_id, "l"):
+            return
+        print("  both connections authenticated (demo + live100k)")
+
+        # mimic the bot's first-minute demo traffic
+        await send(d, "d-sym", PT_SYMBOLS_LIST_REQ,
+                   {"ctidTraderAccountId": demo_id})
+        await await_msg(d, "d-sym", 8, "symbols list", quiet=True)
+        await send(d, "d-sbid", PT_SYMBOL_BY_ID_REQ, {
+            "ctidTraderAccountId": demo_id, "symbolId": [SYMBOL_ID]})
+        await await_msg(d, "d-sbid", 8, "symbol by id", quiet=True)
+        await send(d, "d-sub", PT_SUBSCRIBE_SPOTS_REQ, {
+            "ctidTraderAccountId": demo_id, "symbolId": [SYMBOL_ID]})
+        await await_msg(d, "d-sub", 8, "subscribe", quiet=True)
+        await send(d, "d-tb", PT_GET_TRENDBARS_REQ, {
+            "ctidTraderAccountId": demo_id, "symbolId": SYMBOL_ID,
+            "period": "M15", "toTimestamp": int(time.time() * 1000),
+            "count": 100})
+        await await_msg(d, "d-tb", 8, "trendbar", quiet=True)
+        print("  bot-style traffic replayed on demo connection")
+
+        # trader on demo, using the bot's exact 'ca-N' message-id format,
+        # spread over ~2 minutes with the live session alive throughout
+        for i in range(5):
+            await probe_trader_on(d, demo_id, "ca-%d" % (100 + i))
+            await asyncio.sleep(25)
+        # control: trader on the live connection itself
+        await probe_trader_on(l, live_id, "ca-200")
+        print("  DUAL RESULT: see trader lines above")
+
+
 async def run_variant(env, token, account_id, with_token):
     ctx = ssl.create_default_context()
     import websockets
@@ -238,56 +318,23 @@ async def run_variant(env, token, account_id, with_token):
         else:
             print("  GRANT: no account-list response (silence)")
 
-        # 3) Poison hunt (with-token variant only): which session request
-        #    or how much session age makes the gateway stop answering 2121?
-        if with_token:
-            # symbols list + symbol by id (bot sends these at connect and
-            # on every candle poll via ensure_symbol)
-            await send(ws, "p-sym", PT_SYMBOLS_LIST_REQ,
-                       {"ctidTraderAccountId": account_id})
-            await await_msg(ws, "p-sym", 8, "symbols list", quiet=True)
-            print("  => symbols list: done")
-            await send(ws, "p-sbid", PT_SYMBOL_BY_ID_REQ, {
-                "ctidTraderAccountId": account_id, "symbolId": [SYMBOL_ID],
-            })
-            await await_msg(ws, "p-sbid", 8, "symbol by id", quiet=True)
-            print("  => symbol by id: done")
-            await probe_trader(ws, account_id, 1)      # after symbol lookups
+        # 3) Quick control: trader right after auth (fresh session).
+        await probe_trader(ws, account_id, 1)
+        print("  (the full poison hunt + dual-connection test follow)")
 
-            await send(ws, "p-tb", PT_GET_TRENDBARS_REQ, {
-                "ctidTraderAccountId": account_id,
-                "symbolId": SYMBOL_ID, "period": "M15",
-                "toTimestamp": int(time.time() * 1000), "count": 100,
-            })
-            await await_msg(ws, "p-tb", 8, "trendbar", quiet=True)
-            print("  => trendbar poll: done")
-            await probe_trader(ws, account_id, 2)      # after trendbar
 
-            await send(ws, "p-sub", PT_SUBSCRIBE_SPOTS_REQ, {
-                "ctidTraderAccountId": account_id,
-                "symbolId": [SYMBOL_ID],
-            })
-            await await_msg(ws, "p-sub", 8, "subscribe", quiet=True)
-            print("  => spot subscription: done")
-            await probe_trader(ws, account_id, 3)      # after subscribe
-
-            await send(ws, "p-recon", PT_RECONCILE_REQ,
-                       {"ctidTraderAccountId": account_id})
-            r = await await_msg(ws, "p-recon", 8, "reconcile", quiet=True)
-            print("  => reconcile control: %s"
-                  % ("ANSWERED" if r else "SILENT"))
-
-            # age decay: keep the session alive and re-check trader over
-            # ~3 minutes (the bot's session lives for hours)
-            for i in range(4, 8):
-                await asyncio.sleep(40)
-                await probe_trader(ws, account_id, i)
-            print("  => age test: trader answered every check above = "
-                  "no time decay in this window")
-        else:
-            await send(ws, "p-trader", PT_TRADER_REQ,
-                       {"ctidTraderAccountId": account_id})
-            await await_msg(ws, "p-trader", 8, "trader", quiet=True)
+def live_account(env):
+    try:
+        accs = json.loads(env.get("CTRADER_ACCOUNTS", "{}"))
+    except (ValueError, TypeError):
+        return None, None
+    for short, info in accs.items():
+        if str(info.get("env", "")).lower() == "live":
+            try:
+                return int(info["id"]), short
+            except (KeyError, TypeError, ValueError):
+                continue
+    return None, None
 
 
 def main():
@@ -297,14 +344,20 @@ def main():
         token = json.load(open(TOKENS_FILE)).get("accessToken", "")
     except (OSError, ValueError):
         print("warning: cannot read %s" % TOKENS_FILE)
-    account_id, shortcode = demo_account(env)
-    if account_id is None:
+    demo_id, demo_short = demo_account(env)
+    if demo_id is None:
         print("no demo account found in CTRADER_ACCOUNTS")
         return 1
-    print("probe: demo account %s (id %d), token present: %s"
-          % (shortcode, account_id, bool(token)))
-    asyncio.run(run_variant(env, token, account_id, True))
-    asyncio.run(run_variant(env, token, account_id, False))
+    live_id, live_short = live_account(env)
+    print("probe: demo account %s (id %d), live account %s (id %s), "
+          "token present: %s"
+          % (demo_short, demo_id, live_short or "?", live_id or "?",
+             bool(token)))
+    asyncio.run(run_variant(env, token, demo_id, True))
+    if live_id is not None:
+        asyncio.run(run_dual(env, token, demo_id, live_id))
+    else:
+        print("\nno live account in CTRADER_ACCOUNTS -- skipping dual test")
     return 0
 
 
