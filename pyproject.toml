@@ -1,6 +1,6 @@
 [project]
 name = "crackedalert"
-version = "2.0.24"
+version = "2.0.25"
 description = "Cracked Alert - Telegram trading bot for cTrader Open API (XAUUSD)"
 requires-python = ">=3.9"
 dependencies = [

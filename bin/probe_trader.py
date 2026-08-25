@@ -101,8 +101,11 @@ def fmt(frame):
 
 
 async def send(ws, msg_id, pt, payload):
-    await ws.send(json.dumps({
-        "clientMsgId": msg_id, "payloadType": pt, "payload": payload}))
+    try:
+        await ws.send(json.dumps({
+            "clientMsgId": msg_id, "payloadType": pt, "payload": payload}))
+    except Exception as e:
+        print("  send failed (connection closed?): %s" % e)
 
 
 async def _heartbeat(ws):
