@@ -47,14 +47,22 @@ NAME = {
 
 
 def load_env():
+    """Parse KEY=VALUE lines the way python-dotenv does (the bot uses
+    load_dotenv): strip quotes around values and 'export ' prefixes."""
     out = {}
     with open(ENV_FILE) as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
             k, _, v = line.partition("=")
-            out[k.strip()] = v.strip()
+            k = k.strip()
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            out[k] = v
     return out
 
 
