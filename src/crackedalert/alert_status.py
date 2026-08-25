@@ -109,15 +109,20 @@ class AlertStatusServer:
                 await self._respond(writer, 400, _json({"error": "bad request"}))
                 return
 
-            # Consume and discard remaining request headers (and any small body).
+            # Read request headers (auth may ride in X-Alert-Token) and
+            # discard any small body.
+            headers = {}
             while True:
                 line = await reader.readline()
                 if line in (b"", b"\r\n", b"\n"):
                     break
                 if len(line) > 8192:
                     break
+                name, _, value = line.decode("latin-1").partition(":")
+                if name.strip():
+                    headers[name.strip().lower()] = value.strip()
 
-            await self._dispatch(writer, method, target)
+            await self._dispatch(writer, method, target, headers)
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         finally:
@@ -127,9 +132,12 @@ class AlertStatusServer:
             except Exception:
                 pass
 
-    async def _dispatch(self, writer, method: str, target: str) -> None:
+    async def _dispatch(self, writer, method: str, target: str,
+                        headers: Optional[dict] = None) -> None:
         parsed = urlsplit(target)
         token = self._query_param(parsed.query, "token")
+        if not token:
+            token = ((headers or {}).get("x-alert-token") or "").strip()
         if not token or not self._token \
                 or not hmac.compare_digest(token, self._token):
             await self._respond(writer, 401, _json({"error": "unauthorized"}))

@@ -59,6 +59,20 @@ class AlertStatusEndpointTest(unittest.TestCase):
         data = self.loop.run_until_complete(_raw(self.port, payload))
         return _status(data), _body(data)
 
+    def _get_h(self, token: str) -> tuple:
+        payload = (f"GET /alert-status HTTP/1.1\r\n"
+                   f"Host: h\r\nX-Alert-Token: {token}\r\n"
+                   "Connection: close\r\n\r\n").encode()
+        data = self.loop.run_until_complete(_raw(self.port, payload))
+        return _status(data), _body(data)
+
+    def _ack_h(self, token: str) -> tuple:
+        payload = (f"POST /ack HTTP/1.1\r\n"
+                   f"Host: h\r\nX-Alert-Token: {token}\r\n"
+                   "Connection: close\r\n\r\n").encode()
+        data = self.loop.run_until_complete(_raw(self.port, payload))
+        return _status(data), _body(data)
+
     def _ack(self, token: str) -> tuple:
         payload = (f"POST /ack?token={token} HTTP/1.1\r\n"
                    "Host: h\r\nConnection: close\r\n\r\n").encode()
@@ -103,6 +117,28 @@ class AlertStatusEndpointTest(unittest.TestCase):
         # still active after a failed ack
         _, b = self._get("sekrit")
         self.assertTrue(b["active"])
+
+    def test_header_token_accepted(self) -> None:
+        status, body = self._get_h("sekrit")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"active": False})
+
+    def test_header_token_required(self) -> None:
+        status, body = self._get_h("")
+        self.assertEqual(status, 401)
+        self.assertEqual(body, {"error": "unauthorized"})
+
+    def test_header_wrong_token_rejected(self) -> None:
+        status, body = self._get_h("nope")
+        self.assertEqual(status, 401)
+
+    def test_ack_with_header_token(self) -> None:
+        self.active.set("SL hit for trade 42")
+        status, body = self._ack_h("sekrit")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"ok": True})
+        _, b = self._get("sekrit")
+        self.assertFalse(b["active"])
 
     def test_unknown_route_404(self) -> None:
         payload = (b"GET /nope?token=sekrit HTTP/1.1\r\n"
