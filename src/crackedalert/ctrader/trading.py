@@ -131,11 +131,6 @@ class TradingService:
         self._markets = markets      # env -> MarketData
         self._settings = settings
         self._filled = {}            # orderId -> positionId (pending fills)
-        self._authorized = {}        # shortcode -> bool (account auth result)
-
-    def set_account_authorized(self, shortcode: str, authorized: bool) -> None:
-        """Record the PT_ACCOUNT_AUTH_RES isAuthorized result per account."""
-        self._authorized[shortcode] = authorized
 
     async def execute(self, args, is_market: bool,
                       risk_usd: Optional[float] = None):
@@ -173,12 +168,6 @@ class TradingService:
             # Surface the real cause: the generic reply used to hide it.
             log.warning("balance fetch failed for %s: %s: %s",
                         args.account, e.error_code, e.description)
-            if self._authorized.get(args.account, True) is False:
-                raise TradeRejected(
-                    "error: account %s is not authorized on cTrader "
-                    "(demo likely expired). renew the demo account in "
-                    "cTrader and update CTRADER_ACCOUNTS."
-                    % args.account)
             raise TradeRejected(
                 "error: could not fetch balance for %s "
                 "(cTrader error %s: %s)."

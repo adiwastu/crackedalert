@@ -11,6 +11,7 @@ github.com/spotware/openapi-proto-messages (identical in JSON mode).
 """
 
 import asyncio
+import collections
 import itertools
 import json
 import logging
@@ -95,6 +96,9 @@ class CTraderClient:
         self._ready = asyncio.Event()
         self._stopped = False
         self._runner: Optional[asyncio.Task] = None
+        # (payloadType, clientMsgId, payload keys) of the last few frames;
+        # dumped into timeout errors so a silent gateway is diagnosable.
+        self._recent_frames = collections.deque(maxlen=10)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -156,8 +160,9 @@ class CTraderClient:
             except asyncio.TimeoutError:
                 raise CTraderError(
                     "TIMEOUT",
-                    "no response for payloadType %d within %.0fs"
-                    % (payload_type, timeout))
+                    "no response for payloadType %d within %.0fs "
+                    "(recent frames: %s)"
+                    % (payload_type, timeout, list(self._recent_frames)))
         finally:
             self._pending.pop(msg_id, None)
 
@@ -264,6 +269,8 @@ class CTraderClient:
             pt = frame.get("payloadType")
             payload = frame.get("payload", {}) or {}
             msg_id = frame.get("clientMsgId")
+            self._recent_frames.append(
+                (pt, msg_id, tuple(sorted(payload.keys()))[:6]))
 
             fut = self._pending.get(msg_id) if msg_id else None
             if fut is not None and not fut.done():

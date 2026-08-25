@@ -76,8 +76,7 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 - `error: live trading is locked until the Phase 5 cutover. use the demo account.` — live account while `LIVE_TRADING_ENABLED` is off.
 - `error: cTrader <env> link is down, try again shortly.` — connection down.
 - `error: could not fetch live price for <symbol>.` — no quote.
-- `error: could not fetch balance for <acct> (cTrader error <code>: <desc>).` — the cTrader balance request failed; the code/description reveal why (e.g. expired demo account or invalid token). Also logged to the service journal.
-- `error: account <acct> is not authorized on cTrader (demo likely expired). renew the demo account in cTrader and update CTRADER_ACCOUNTS.` — account auth reported `isAuthorized=false`; the owner chat is also notified at connect.
+- `error: could not fetch balance for <acct> (cTrader error <code>: <desc>).` — the cTrader balance request failed; the code/description reveal why. Also logged to the service journal.
 - `error: could not fetch balance for <acct> (balance <n>).` — the account reports a zero/negative balance.
 - `error: lot size calculated to 0. check parameters.` — math produced 0 lots.
 - `error: calculated <n> lots below the <min> minimum -- not placing the order.` — below broker minimum.

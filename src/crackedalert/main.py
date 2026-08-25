@@ -252,25 +252,12 @@ async def _run_bot(settings: Settings) -> None:
                     "ctidTraderAccountId": acc.ctid_account_id,
                     "accessToken": tokens.access_token,
                 })
-                authorized = bool(auth_resp.get("isAuthorized"))
-                trader.set_account_authorized(acc.shortcode, authorized)
-                log.info("[%s] account %s (%d) authenticated: "
-                         "isAuthorized=%s",
-                         env, acc.shortcode, acc.ctid_account_id, authorized)
-                if not authorized:
-                    log.warning(
-                        "[%s] account %s (%d) NOT authorized "
-                        "(expired demo account or invalid token?)",
-                        env, acc.shortcode, acc.ctid_account_id)
-                    try:
-                        await notify(
-                            settings.allowed_chat_ids[0],
-                            "\u26a0\ufe0f account %s not authorized on "
-                            "cTrader (demo likely expired). renew the demo "
-                            "account and update CTRADER_ACCOUNTS."
-                            % acc.shortcode)
-                    except Exception:
-                        log.exception("auth-failure notify failed")
+                # Note: ProtoOAAccountAuthRes has NO isAuthorized field
+                # (verified against the official proto) -- a response at
+                # all means the account authenticated; failures arrive as
+                # ProtoOAErrorRes. Log the raw response for diagnostics.
+                log.info("[%s] account %s (%d) auth res: %r",
+                         env, acc.shortcode, acc.ctid_account_id, auth_resp)
             if env == feed_account.environment:
                 await feed.after_connect(settings.trade_symbol,
                                          store.active_symbols())
