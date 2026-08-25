@@ -253,6 +253,7 @@ async def _run_bot(settings: Settings) -> None:
                     "accessToken": tokens.access_token,
                 })
                 authorized = bool(auth_resp.get("isAuthorized"))
+                trader.set_account_authorized(acc.shortcode, authorized)
                 log.info("[%s] account %s (%d) authenticated: "
                          "isAuthorized=%s",
                          env, acc.shortcode, acc.ctid_account_id, authorized)
@@ -261,6 +262,15 @@ async def _run_bot(settings: Settings) -> None:
                         "[%s] account %s (%d) NOT authorized "
                         "(expired demo account or invalid token?)",
                         env, acc.shortcode, acc.ctid_account_id)
+                    try:
+                        await notify(
+                            settings.allowed_chat_ids[0],
+                            "\u26a0\ufe0f account %s not authorized on "
+                            "cTrader (demo likely expired). renew the demo "
+                            "account and update CTRADER_ACCOUNTS."
+                            % acc.shortcode)
+                    except Exception:
+                        log.exception("auth-failure notify failed")
             if env == feed_account.environment:
                 await feed.after_connect(settings.trade_symbol,
                                          store.active_symbols())

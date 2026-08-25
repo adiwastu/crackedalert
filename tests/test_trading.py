@@ -281,6 +281,25 @@ class TradingServiceTests(unittest.TestCase):
         self.assertIn("balance 0", msg)
         self.assertEqual(cli.orders, [])    # no order placed
 
+    def test_balance_error_unauthorized_account_message(self):
+        # A known-unauthorized account (e.g. expired demo) gets the
+        # actionable message instead of the raw cTrader timeout/error.
+        cli = BalanceFailClient("error")
+        service = trading.TradingService(
+            clients={"demo": cli},
+            markets={"demo": FakeMarket(self.quote)},
+            settings=make_settings())
+        service.set_account_authorized("demo", False)
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.5, account="demo")
+        with self.assertRaises(trading.TradeRejected) as cm:
+            run(service.execute(args, True))
+        msg = str(cm.exception)
+        self.assertIn("not authorized", msg)
+        self.assertIn("renew the demo account", msg)
+        self.assertNotIn("ACCOUNT_NOT_FOUND", msg)
+        self.assertEqual(cli.orders, [])    # no order placed
+
     def test_pending_places_spread_offset_price(self):
         args = TradeArgs(entry=2400.0, sl=2395.0, widen=False, rr=3,
                          risk_pct=1, account="demo")
