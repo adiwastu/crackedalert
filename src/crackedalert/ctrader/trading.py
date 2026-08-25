@@ -164,12 +164,26 @@ class TradingService:
 
         try:
             balance = await fetch_balance(cli, account.ctid_account_id)
-        except (ct.CTraderError, ct.NotConnected):
+        except ct.CTraderError as e:
+            # Surface the real cause: the generic reply used to hide it.
+            log.warning("balance fetch failed for %s: %s: %s",
+                        args.account, e.error_code, e.description)
             raise TradeRejected(
-                "error: could not fetch balance for %s." % args.account)
+                "error: could not fetch balance for %s "
+                "(cTrader error %s: %s)."
+                % (args.account, e.error_code, e.description))
+        except ct.NotConnected:
+            log.warning("balance fetch failed for %s: link down",
+                        args.account)
+            raise TradeRejected(
+                "error: could not fetch balance for %s (link down)."
+                % args.account)
         if balance <= 0:
+            log.warning("balance fetch returned %s for %s",
+                        balance, args.account)
             raise TradeRejected(
-                "error: could not fetch balance for %s." % args.account)
+                "error: could not fetch balance for %s (balance %s)."
+                % (args.account, balance))
 
         usd_per_point = symbol.lot_size / 100.0 if symbol.lot_size else 100.0
 

@@ -170,6 +170,24 @@ class FakeMarket:
         return self._quote
 
 
+class BalanceFailClient(FakeClient):
+    """FakeClient whose PT_TRADER_REQ fails (error) or reports 0 balance."""
+
+    def __init__(self, fail_mode="error"):
+        super().__init__()
+        self.fail_mode = fail_mode
+
+    async def request(self, payload_type, payload, timeout=None):
+        if payload_type == ct.PT_TRADER_REQ:
+            if self.fail_mode == "error":
+                raise ct.CTraderError(
+                    "ACCOUNT_NOT_FOUND", "account 42 not found")
+            if self.fail_mode == "zero":
+                return ct.PT_TRADER_RES, {
+                    "trader": {"balance": 0, "moneyDigits": 2}}
+        return await super().request(payload_type, payload, timeout)
+
+
 def make_settings():
     return Settings(
         telegram_bot_token="t", allowed_chat_ids=[1],
@@ -229,6 +247,39 @@ class TradingServiceTests(unittest.TestCase):
         with self.assertRaises(trading.TradeRejected) as cm:
             run(service.execute(args, True))
         self.assertIn("live price", str(cm.exception))
+
+    def test_balance_error_reports_cTrader_code(self):
+        # The generic message must include the real error so the cause
+        # (expired demo, bad token, server error) is visible to the user.
+        cli = BalanceFailClient("error")
+        service = trading.TradingService(
+            clients={"demo": cli},
+            markets={"demo": FakeMarket(self.quote)},
+            settings=make_settings())
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.5, account="demo")
+        with self.assertRaises(trading.TradeRejected) as cm:
+            run(service.execute(args, True))
+        msg = str(cm.exception)
+        self.assertIn("could not fetch balance for demo", msg)
+        self.assertIn("ACCOUNT_NOT_FOUND", msg)
+        self.assertIn("account 42 not found", msg)
+        self.assertEqual(cli.orders, [])    # no order placed
+
+    def test_balance_zero_reports_value(self):
+        cli = BalanceFailClient("zero")
+        service = trading.TradingService(
+            clients={"demo": cli},
+            markets={"demo": FakeMarket(self.quote)},
+            settings=make_settings())
+        args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
+                         risk_pct=0.5, account="demo")
+        with self.assertRaises(trading.TradeRejected) as cm:
+            run(service.execute(args, True))
+        msg = str(cm.exception)
+        self.assertIn("could not fetch balance for demo", msg)
+        self.assertIn("balance 0", msg)
+        self.assertEqual(cli.orders, [])    # no order placed
 
     def test_pending_places_spread_offset_price(self):
         args = TradeArgs(entry=2400.0, sl=2395.0, widen=False, rr=3,

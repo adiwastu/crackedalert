@@ -248,12 +248,19 @@ async def _run_bot(settings: Settings) -> None:
             for acc in settings.accounts.values():
                 if acc.environment != env:
                     continue
-                await cli.request(ct.PT_ACCOUNT_AUTH_REQ, {
+                _pt, auth_resp = await cli.request(ct.PT_ACCOUNT_AUTH_REQ, {
                     "ctidTraderAccountId": acc.ctid_account_id,
                     "accessToken": tokens.access_token,
                 })
-                log.info("[%s] account %s (%d) authenticated", env,
-                         acc.shortcode, acc.ctid_account_id)
+                authorized = bool(auth_resp.get("isAuthorized"))
+                log.info("[%s] account %s (%d) authenticated: "
+                         "isAuthorized=%s",
+                         env, acc.shortcode, acc.ctid_account_id, authorized)
+                if not authorized:
+                    log.warning(
+                        "[%s] account %s (%d) NOT authorized "
+                        "(expired demo account or invalid token?)",
+                        env, acc.shortcode, acc.ctid_account_id)
             if env == feed_account.environment:
                 await feed.after_connect(settings.trade_symbol,
                                          store.active_symbols())
