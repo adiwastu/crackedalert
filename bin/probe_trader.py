@@ -38,6 +38,10 @@ PT_RECONCILE_REQ = 2124
 PT_RECONCILE_RES = 2125
 PT_SUBSCRIBE_SPOTS_REQ = 2127
 PT_SUBSCRIBE_SPOTS_RES = 2128
+PT_SYMBOLS_LIST_REQ = 2114
+PT_SYMBOLS_LIST_RES = 2115
+PT_SYMBOL_BY_ID_REQ = 2116
+PT_SYMBOL_BY_ID_RES = 2117
 PT_GET_TRENDBARS_REQ = 2137
 PT_GET_TRENDBARS_RES = 2138
 PT_GET_ACCOUNTS_REQ = 2149
@@ -48,6 +52,8 @@ NAME = {
     51: "HEARTBEAT", 2100: "APP_AUTH_REQ", 2101: "APP_AUTH_RES",
     2102: "ACCT_AUTH_REQ", 2103: "ACCT_AUTH_RES",
     2104: "VERSION_REQ", 2105: "VERSION_RES",
+    2114: "SYMBOLS_LIST_REQ", 2115: "SYMBOLS_LIST_RES",
+    2116: "SYMBOL_BY_ID_REQ", 2117: "SYMBOL_BY_ID_RES",
     2121: "TRADER_REQ", 2122: "TRADER_RES",
     2124: "RECONCILE_REQ", 2125: "RECONCILE_RES",
     2127: "SUBSCRIBE_REQ", 2128: "SUBSCRIBE_RES",
@@ -233,9 +239,20 @@ async def run_variant(env, token, account_id, with_token):
             print("  GRANT: no account-list response (silence)")
 
         # 3) Poison hunt (with-token variant only): which session request
-        #    makes the gateway stop answering 2121?
+        #    or how much session age makes the gateway stop answering 2121?
         if with_token:
-            await probe_trader(ws, account_id, 1)      # control
+            # symbols list + symbol by id (bot sends these at connect and
+            # on every candle poll via ensure_symbol)
+            await send(ws, "p-sym", PT_SYMBOLS_LIST_REQ,
+                       {"ctidTraderAccountId": account_id})
+            await await_msg(ws, "p-sym", 8, "symbols list", quiet=True)
+            print("  => symbols list: done")
+            await send(ws, "p-sbid", PT_SYMBOL_BY_ID_REQ, {
+                "ctidTraderAccountId": account_id, "symbolId": [SYMBOL_ID],
+            })
+            await await_msg(ws, "p-sbid", 8, "symbol by id", quiet=True)
+            print("  => symbol by id: done")
+            await probe_trader(ws, account_id, 1)      # after symbol lookups
 
             await send(ws, "p-tb", PT_GET_TRENDBARS_REQ, {
                 "ctidTraderAccountId": account_id,
@@ -259,6 +276,14 @@ async def run_variant(env, token, account_id, with_token):
             r = await await_msg(ws, "p-recon", 8, "reconcile", quiet=True)
             print("  => reconcile control: %s"
                   % ("ANSWERED" if r else "SILENT"))
+
+            # age decay: keep the session alive and re-check trader over
+            # ~3 minutes (the bot's session lives for hours)
+            for i in range(4, 8):
+                await asyncio.sleep(40)
+                await probe_trader(ws, account_id, i)
+            print("  => age test: trader answered every check above = "
+                  "no time decay in this window")
         else:
             await send(ws, "p-trader", PT_TRADER_REQ,
                        {"ctidTraderAccountId": account_id})
