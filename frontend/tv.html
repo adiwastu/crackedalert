@@ -33,7 +33,7 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 .hint{font-size:12px;color:#666;margin-top:4px}
 </style>
 
-<h1>Cracked Alert <b>v2.0.34</b> — TradingView import</h1>
+<h1>Cracked Alert <b>v2.0.35</b> — TradingView import</h1>
 
 <section>
   <div id="tv-paste" onclick="document.getElementById('tv-file').click()">
@@ -130,29 +130,51 @@ function setDir(d){
 // TradingView clipboard parsing (see FROM_TRADINGVIEW_COPY.md)
 // -------------------------------------------------------------
 document.addEventListener('paste',(e)=>{
-  const html=e.clipboardData.getData('text/html');
-  if(html){parseTradingViewClip(html);e.preventDefault();}
+  const cd=e.clipboardData;
+  if(!cd)return;
+  const types=Array.from(cd.types||[]);
+  for(const t of types){
+    if(t==='Files')continue;
+    let raw='';
+    try{raw=cd.getData(t)||'';}catch(_){continue;}
+    if(!raw)continue;
+    const clip=parseTradingViewClip(raw);
+    if(clip){
+      e.preventDefault();
+      CLIP=clip;
+      $('tv-raw').textContent=JSON.stringify(clip,null,2);
+      fillTrade(clip);
+      return;
+    }
+  }
+  if(types.length){
+    $('tv-err').textContent='No TradingView clipboard data found. '+
+      'Clipboard formats seen: '+types.join(', ')+
+      '. Copy a Risk/Reward drawing in TradingView first.';
+  }
 });
 function filePicked(input){
   if(!input.files.length)return;
-  input.files[0].text().then(parseTradingViewClip);
+  input.files[0].text().then(t=>{
+    const clip=parseTradingViewClip(t);
+    if(clip){CLIP=clip;$('tv-raw').textContent=JSON.stringify(clip,null,2);fillTrade(clip);}
+  });
 }
-function parseTradingViewClip(html){
-  const err=$('tv-err');
-  err.textContent='';
-  if(!html||html.indexOf('data-tradingview-clip')<0){
-    err.textContent='No TradingView clipboard data found. Copy a Risk/Reward drawing in TradingView first.';
-    return;
+function parseTradingViewClip(raw){
+  // The clip may arrive as raw JSON or wrapped in HTML carrying a
+  // data-tradingview-clip attribute. Try both.
+  try{
+    const c=JSON.parse(raw);
+    if(c&&(c.sources||c.title))return c;
+  }catch(_){}
+  if(raw.indexOf('data-tradingview-clip')>=0){
+    try{
+      const doc=new DOMParser().parseFromString(raw,'text/html');
+      const span=doc.querySelector('[data-tradingview-clip]');
+      if(span)return JSON.parse(span.getAttribute('data-tradingview-clip'));
+    }catch(_){}
   }
-  const doc=new DOMParser().parseFromString(html,'text/html');
-  const span=doc.querySelector('[data-tradingview-clip]');
-  if(!span){err.textContent='Clipboard HTML found but no data-tradingview-clip element.';return;}
-  let clip;
-  try{clip=JSON.parse(span.getAttribute('data-tradingview-clip'));}
-  catch(x){err.textContent='Clipboard JSON parse failed:\n'+x.message+'\n\nRaw:\n'+html.slice(0,2000);return;}
-  CLIP=clip;
-  $('tv-raw').textContent=JSON.stringify(clip,null,2);
-  fillTrade(clip);
+  return null;
 }
 
 function extractTrade(clip){
