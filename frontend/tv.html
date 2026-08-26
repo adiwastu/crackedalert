@@ -23,8 +23,8 @@ button:disabled{opacity:.4}
 .seg button{flex:1;padding:8px;background:#fff;color:#111;border:none;border-right:1px solid #111;font-size:14px}
 .seg button:last-child{border-right:none}
 .seg button.active{background:#111;color:#fff}
-#tv-paste{border:2px dashed #888;border-radius:8px;padding:24px 12px;text-align:center;color:#666;font-size:14px;cursor:pointer}
-#tv-paste.hit{border-color:#00703c;color:#00703c}
+#tv-paste{border:2px dashed #888;border-radius:8px;padding:24px 12px;text-align:center;color:#666;font-size:14px;cursor:pointer;outline:none}
+#tv-paste:focus,#tv-paste.active{border-color:#00703c;color:#00703c}
 details{margin-top:8px}
 details summary{font-size:12px;color:#666;cursor:pointer}
 details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radius:4px;padding:6px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
@@ -33,14 +33,16 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 .hint{font-size:12px;color:#666;margin-top:4px}
 </style>
 
-<h1>Cracked Alert <b>v2.0.35</b> — TradingView import</h1>
+<h1>Cracked Alert <b>v2.0.36</b> — TradingView import</h1>
 
 <section>
-  <div id="tv-paste" onclick="document.getElementById('tv-file').click()">
-    Copy a <b>Risk/Reward</b> drawing in TradingView, then paste it here<br>
-    (or just paste anywhere on this page)
+  <div id="tv-paste" tabindex="0" onclick="this.focus()">
+    Copy a <b>Risk/Reward</b> drawing in TradingView, then<br>
+    click here and press <b>Ctrl+V</b> (or paste anywhere on this page)
   </div>
+  <div class="hint" style="margin-top:8px">No clipboard data? Paste a plain <b>text/html</b> clipboard dump below to inspect it.</div>
   <input type="file" id="tv-file" accept="text/html" style="display:none" onchange="filePicked(this)">
+  <button onclick="document.getElementById('tv-file').click()" style="margin-top:8px;background:#444">Load clipboard file…</button>
   <div class="err" id="tv-err"></div>
 </section>
 
@@ -128,11 +130,29 @@ function setDir(d){
 
 // -------------------------------------------------------------
 // TradingView clipboard parsing (see FROM_TRADINGVIEW_COPY.md)
+// Capture flow follows the reference clipboard-inspector pattern:
+// a focusable paste zone + a document-level listener; every
+// clipboard type is scanned; if no TV clip is found the raw
+// payloads are dumped on the page for debugging.
 // -------------------------------------------------------------
-document.addEventListener('paste',(e)=>{
+const zone=document.getElementById('tv-paste');
+zone.addEventListener('paste',handlePaste);
+document.addEventListener('paste',handlePaste);
+zone.addEventListener('focus',()=>zone.classList.add('active'));
+zone.addEventListener('blur',()=>zone.classList.remove('active'));
+
+function isEditable(el){
+  return el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||
+    el.tagName==='SELECT'||el.isContentEditable);
+}
+
+function handlePaste(e){
   const cd=e.clipboardData;
   if(!cd)return;
   const types=Array.from(cd.types||[]);
+  if(!types.length)return;
+
+  // scan every format for a TradingView clip
   for(const t of types){
     if(t==='Files')continue;
     let raw='';
@@ -142,17 +162,31 @@ document.addEventListener('paste',(e)=>{
     if(clip){
       e.preventDefault();
       CLIP=clip;
-      $('tv-raw').textContent=JSON.stringify(clip,null,2);
+      $('tv-raw').textContent=JSON.stringify(clip,null,2)+
+        '\n\n(from clipboard type: '+t+')';
+      $('tv-err').textContent='';
       fillTrade(clip);
       return;
     }
   }
-  if(types.length){
+
+  // nothing usable: only swallow the paste (and show a dump) when the
+  // target is not a form field, so normal pastes into inputs still work
+  if(!isEditable(e.target)){
+    e.preventDefault();
     $('tv-err').textContent='No TradingView clipboard data found. '+
-      'Clipboard formats seen: '+types.join(', ')+
-      '. Copy a Risk/Reward drawing in TradingView first.';
+      'Clipboard formats seen: '+types.join(', ');
+    const lines=[];
+    for(const t of types){
+      let raw='';
+      try{raw=t==='Files'?'(files)':cd.getData(t)||'';}catch(_){raw='(unreadable)';}
+      lines.push('--- '+t+' ---\n'+(raw.length>6000?raw.slice(0,6000)+'\n...[truncated]':raw));
+    }
+    $('tv-raw').textContent=lines.join('\n\n');
+    $('trade-card').style.display='';
+    $('builder').style.display='';
   }
-});
+}
 function filePicked(input){
   if(!input.files.length)return;
   input.files[0].text().then(t=>{
