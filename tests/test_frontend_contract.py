@@ -39,7 +39,7 @@ class TradingViewImportContractTest(unittest.TestCase):
         self.assertIn("querySelector('[data-tradingview-clip]')", self.tv)
 
     def test_field_extraction_present(self) -> None:
-        self.assertIn("points[0].price", self.tv)
+        self.assertIn("points.0.price", self.tv)
         self.assertIn("stopLevel", self.tv)
         self.assertIn("profitLevel", self.tv)
         self.assertIn("LineToolRiskRewardShort", self.tv)

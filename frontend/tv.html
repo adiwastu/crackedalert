@@ -38,7 +38,7 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 .fmt-val{font-family:monospace;font-size:10px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;color:#333}
 </style>
 
-<h1>Cracked Alert <b>v2.0.37</b> — TradingView import</h1>
+<h1>Cracked Alert <b>v2.0.38</b> — TradingView import</h1>
 
 <section>
   <div id="tv-paste" tabindex="0" onclick="this.focus()">
@@ -168,7 +168,7 @@ function showFormats(types,getData){
     }else{
       let raw='';
       try{raw=getData(t)||'';}catch(_){raw='(unreadable)';}
-      const preview=raw.length>2000?raw.slice(0,2000)+'\n...[truncated]':raw;
+      const preview=raw.length>20000?raw.slice(0,20000)+'\n...[truncated]':raw;
       card.innerHTML='<div class="fmt-type">'+esc(t)+'</div>'+
         '<div class="fmt-val">'+esc(preview)+'</div>';
     }
@@ -226,26 +226,62 @@ function parseTradingViewClip(raw){
   return null;
 }
 
+function deep(obj,path){
+  let v=obj;
+  for(const k of path.split('.')){
+    if(v==null)return undefined;
+    v=v[k];
+  }
+  return v;
+}
+function firstOf(obj,paths){
+  for(const p of paths){
+    const v=deep(obj,p);
+    if(v!==undefined&&v!==null)return v;
+  }
+  return undefined;
+}
+
 function extractTrade(clip){
-  // Direction per FROM_TRADINGVIEW_COPY.md: source.type is
-  // 'LineToolRiskRewardShort' or 'LineToolRiskRewardLong'.
-  const source=(clip&&clip.sources&&clip.sources[0]&&clip.sources[0].source)||{};
-  const type=String(source.type||'');
-  const symbolRaw=String(source.symbol||'');
+  // Real TradingView clip shape (validated from a live copy):
+  //   sources[0].source.type            = 'LineToolRiskRewardShort'|'Long'
+  //   sources[0].source.state.symbol    = 'OANDA:XAUUSD'
+  //   sources[0].source.state.interval  = '5'
+  //   prices/sizes live in source.state (points/stopLevel/profitLevel/
+  //   qty/amountStop/amountTarget). Probe state first, then source.
+  const type=String(firstOf(clip,
+    ['sources.0.source.type','sources.0.type'])||'');
+  const symbolRaw=String(firstOf(clip,
+    ['sources.0.source.state.symbol','sources.0.source.symbol'])||'');
   const symbol=symbolRaw.includes(':')?symbolRaw.split(':').pop():symbolRaw;
-  const dir=type.includes('Short')?'short':(type.includes('Long')?'long':S.dir);
-  const entry=source.points&&source.points[0]?source.points[0].price:null;
+  const dir=type.includes('Short')?'short':
+    (type.includes('Long')?'long':S.dir);
+  const entry=firstOf(clip,[
+    'sources.0.source.state.points.0.price',
+    'sources.0.source.points.0.price',
+    'sources.0.points.0.price']);
+  const sl=firstOf(clip,[
+    'sources.0.source.state.stopLevel',
+    'sources.0.source.stopLevel','sources.0.stopLevel']);
+  const tp=firstOf(clip,[
+    'sources.0.source.state.profitLevel',
+    'sources.0.source.profitLevel','sources.0.profitLevel']);
   return {
-    title:clip&&clip.title,
+    title:firstOf(clip,['sources.0.source.state.title','title']),
     symbol:symbol,
-    interval:source.interval,
+    interval:firstOf(clip,
+      ['sources.0.source.state.interval','sources.0.source.interval']),
     dir:dir,
     entry:entry,
-    sl:source.stopLevel,
-    tp:source.profitLevel,
-    qty:source.qty,
-    amountStop:source.amountStop,
-    amountTarget:source.amountTarget,
+    sl:sl,
+    tp:tp,
+    qty:firstOf(clip,['sources.0.source.state.qty','sources.0.source.qty']),
+    amountStop:firstOf(clip,
+      ['sources.0.source.state.amountStop','sources.0.source.amountStop']),
+    amountTarget:firstOf(clip,
+      ['sources.0.source.state.amountTarget','sources.0.source.amountTarget']),
+    stateKeys:Object.keys(
+      deep(clip,'sources.0.source.state')||{}).join(', '),
   };
 }
 
@@ -257,7 +293,12 @@ function fillTrade(clip){
   $('tv-sl').value=t.sl!=null?t.sl:'';
   $('tv-tp').value=t.tp!=null?t.tp:'';
   $('tv-title').textContent=(t.title?t.title+' · ':'')+
-    'qty '+t.qty+' · stop '+t.amountStop+' · target '+t.amountTarget;
+    'qty '+(t.qty!=null?t.qty:'?')+' · stop '+(t.amountStop!=null?t.amountStop:'?')+
+    ' · target '+(t.amountTarget!=null?t.amountTarget:'?');
+  if(t.entry==null&&t.sl==null&&t.tp==null){
+    $('tv-err').textContent='Clip found but no price fields extracted. '+
+      'State keys seen: '+(t.stateKeys||'(none)');
+  }
   S.dir=t.dir;
   $('dir-long').classList.toggle('active',t.dir==='long');
   $('dir-short').classList.toggle('active',t.dir==='short');
