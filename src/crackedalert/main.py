@@ -32,6 +32,24 @@ from .ctrader.trading import TradingService, TradeRejected
 log = logging.getLogger("crackedalert.main")
 
 
+def _execution_closes_position(order: dict, position: dict) -> bool:
+    """True when an ExecutionEvent closes a position.
+
+    A close (broker-side SL/TP hit or manual) arrives as an ExecutionEvent
+    whose closing order trades the OPPOSITE side of the position; open
+    fills carry the same side on both.
+    """
+    if not isinstance(order, dict) or not isinstance(position, dict):
+        return False
+    order_td = order.get("tradeData")
+    pos_td = position.get("tradeData")
+    if not isinstance(order_td, dict) or not isinstance(pos_td, dict):
+        return False
+    o_side = order_td.get("tradeSide")
+    p_side = pos_td.get("tradeSide")
+    return bool(o_side and p_side and o_side != p_side)
+
+
 class _ConflictFilter(logging.Filter):
     """Collapse Telegram's 409 Conflict traceback to a single actionable
     line. It repeats every few seconds while two bots poll one token, and
@@ -190,7 +208,10 @@ async def _run_bot(settings: Settings) -> None:
                  alert.id, pos_id, spec["symbol"], spec["timeframe"])
 
     def on_execution(payload: dict) -> None:
-        """Create pending-order cc guards as fills stream in."""
+        """Create pending-order cc guards as fills stream in; drop guards
+        for positions the event shows as closed (broker-side SL/TP hits
+        or manual closes), so stale guards die the moment the position
+        closes instead of lingering until a candle crosses the level."""
         order = payload.get("order") or {}
         position = payload.get("position") or {}
         order_id = order.get("orderId")
@@ -199,6 +220,17 @@ async def _run_bot(settings: Settings) -> None:
             position_id = order.get("positionId")
         if order_id is not None:
             _materialize_pending_cc(order_id, position_id)
+        if position_id is not None \
+                and _execution_closes_position(order, position):
+            try:
+                pos_int = int(position_id)
+            except (TypeError, ValueError):
+                return
+            n = candle_store.cancel_for_position(pos_int)
+            if n:
+                log.info("position %s closed on stream: cancelled %d "
+                         "cc guard(s)", position_id, n)
+                _sync_candle_feed()
 
     for _env, cli in clients.items():
         cli.add_event_handler(ct.PT_EXECUTION_EVENT, on_execution)
@@ -221,9 +253,15 @@ async def _run_bot(settings: Settings) -> None:
             else:
                 raise
 
+    def _sync_candle_feed() -> None:
+        """Drop feed keys the store no longer needs (guards fired,
+        cancelled, or their position closed on the stream)."""
+        candle_feed.sync_keys(candle_store.active_keys())
+
     candle_engine = CandleAlertEngine(candle_store, notify, fmt.candle_alert_fired,
                                       on_close_hit=on_cc_close,
-                                      on_broadcast=broadcast)
+                                      on_broadcast=broadcast,
+                                      on_alert_removed=_sync_candle_feed)
     candle_feed = CandleFeed(clients[feed_account.environment],
                              markets[feed_account.environment],
                              feed_account.ctid_account_id, candle_engine)

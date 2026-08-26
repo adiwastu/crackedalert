@@ -420,12 +420,21 @@ class CandleAlertEngine:
     def __init__(self, store: CandleAlertStore, notify: Notifier,
                  format_fired: Formatter,
                  on_close_hit: Optional[Callable] = None,
-                 on_broadcast: Optional[Broadcaster] = None):
+                 on_broadcast: Optional[Broadcaster] = None,
+                 on_alert_removed: Optional[Callable[[], None]] = None):
         self._store = store
         self._notify = notify
         self._format = format_fired
         self._on_close_hit = on_close_hit
         self._on_broadcast = on_broadcast
+        self._on_alert_removed = on_alert_removed
+
+    def _removed(self) -> None:
+        if self._on_alert_removed is not None:
+            try:
+                self._on_alert_removed()
+            except Exception:
+                log.exception("on_alert_removed callback failed")
 
     async def on_closed_bar(self, symbol: str, timeframe: str,
                             close: float, ts_minutes: int) -> None:
@@ -447,6 +456,7 @@ class CandleAlertEngine:
                                   alert.id)
                     continue
                 self._store.delete(alert.id)
+                self._removed()
                 continue
 
             if alert.broadcast:
@@ -457,6 +467,7 @@ class CandleAlertEngine:
                                   "keeping alert", alert.id)
                     continue
                 self._store.delete(alert.id)
+                self._removed()
                 continue
 
             # existing notify path
@@ -467,6 +478,7 @@ class CandleAlertEngine:
                               "-- keeping alert", alert.chat_id, alert.id)
                 continue
             self._store.delete(alert.id)
+            self._removed()
 
     async def _broadcast(self, alert: CandleAlert) -> None:
         if self._on_broadcast is None:

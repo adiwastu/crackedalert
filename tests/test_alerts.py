@@ -299,6 +299,26 @@ class CandleEngineTests(unittest.TestCase):
         run(self.engine.on_closed_bar("XAUUSD", "M15", 2000.0, 100))
         self.assertEqual(self.sent, [])
 
+    def test_guard_removal_callback_fires(self):
+        removed = []
+
+        async def notify(chat_id, text):
+            pass
+
+        async def close_hit(alert):
+            pass
+
+        engine = alerts.CandleAlertEngine(
+            self.store, notify, fmt.candle_alert_fired,
+            on_close_hit=close_hit,
+            on_alert_removed=lambda: removed.append(True))
+        self.store.create(111, "XAUUSD", "M15", 2450.0,
+                          alerts.CANDLE_ABOVE, "guard",
+                          action="close", position_id=42)
+        run(engine.on_closed_bar("XAUUSD", "M15", 2450.5, 101))
+        self.assertEqual(removed, [True])
+        self.assertEqual(self.store.for_key("XAUUSD", "M15"), [])
+
     def test_failed_notify_keeps_alert(self):
         self.store.create(111, "XAUUSD", "M15", 2450.0,
                           alerts.CANDLE_ABOVE, "note")

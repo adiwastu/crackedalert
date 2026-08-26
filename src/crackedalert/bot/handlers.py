@@ -475,6 +475,7 @@ class Handlers:
             if r.get("ok") and r.get("id") is not None:
                 if self._candle_store is not None:
                     self._candle_store.cancel_for_position(int(r["id"]))
+        self._sync_candle_feed()
         await self._reply(update, fmt.close_all_result(account, results))
 
     async def close_position(self, update: Update,
@@ -510,6 +511,7 @@ class Handlers:
             n = self._candle_store.cancel_for_position(position_id)
             if n:
                 log.info("cancelled %d cc guard(s) for position %d", n, position_id)
+            self._sync_candle_feed()
         await self._reply(update, fmt.close_success(account, position_id))
 
     async def cancel_order(self, update: Update,
@@ -567,6 +569,13 @@ class Handlers:
             return
         await self._reply(update, fmt.breakeven_result(account, results))
 
+    def _sync_candle_feed(self) -> None:
+        """Drop candle-feed keys the store no longer needs, so stale
+        guards (fired, cancelled, or position closed) stop the 10s
+        trendbar polling instead of leaking forever."""
+        if self._candle_store is not None and self._candle_feed is not None:
+            self._candle_feed.sync_keys(self._candle_store.active_keys())
+
     async def cc_alert(self, update: Update,
                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
@@ -618,6 +627,7 @@ class Handlers:
             return
         alert_id = tokens[1]
         if self._candle_store.cancel(alert_id, update.effective_chat.id):
+            self._sync_candle_feed()
             await self._reply(update, fmt.candle_cancelled(alert_id.upper()))
         else:
             await self._reply(

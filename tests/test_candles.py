@@ -16,6 +16,25 @@ def run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
+class CandleFeedKeySyncTests(unittest.TestCase):
+    def test_sync_keys_prunes_stale_keys(self):
+        feed = CandleFeed(cli=None, market=None, account_id=1, engine=None)
+        feed.add_symbol("XAUUSD", "M15")
+        feed.add_symbol("EURUSD", "H1")
+        feed.sync_keys([("XAUUSD", "M15")])
+        self.assertEqual(feed.symbols(), {("XAUUSD", "M15")})
+
+    def test_sync_keys_keeps_all_wanted(self):
+        feed = CandleFeed(cli=None, market=None, account_id=1, engine=None)
+        feed.add_symbol("XAUUSD", "M5")
+        feed.add_symbol("EURUSD", "H1")
+        feed.sync_keys([("xauusd", "m5"), ("EURUSD", "H1")])
+        self.assertEqual(feed.symbols(),
+                         {("XAUUSD", "M5"), ("EURUSD", "H1")})
+        feed.sync_keys([("XAUUSD", "M5")])
+        self.assertEqual(feed.symbols(), {("XAUUSD", "M5")})
+
+
 def bar(ts, low, delta_close):
     return {
         "utcTimestampInMinutes": ts,

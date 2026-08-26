@@ -59,6 +59,12 @@ class CandleFeed:
     def remove_symbol(self, symbol: str, timeframe: str) -> None:
         self._keys.discard((symbol.upper(), timeframe.upper()))
 
+    def sync_keys(self, wanted) -> None:
+        """Keep only the (symbol, timeframe) keys that are still wanted
+        (from the candle-alert store). Stops polling stale keys after
+        guards fire, get cancelled, or their position closes."""
+        self._keys &= {(str(s).upper(), str(t).upper()) for s, t in wanted}
+
     def symbols(self) -> set:
         return set(self._keys)
 
