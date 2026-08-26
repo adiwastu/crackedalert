@@ -55,10 +55,12 @@ class TradingViewImportContractTest(unittest.TestCase):
         self.assertIn('id="tv-symbol"', self.tv)
 
     def test_pending_only(self) -> None:
-        # The drawing page is strictly for pending orders: no /m toggle.
+        # The drawing page is strictly for pending orders: no /m toggle,
+        # and the pending-order builder is ALWAYS visible (never display:none).
         self.assertNotIn("seg-market", self.tv)
         self.assertNotIn("'/m'", self.tv)
         self.assertIn("'/p'", self.tv)
+        self.assertNotIn("#builder{display:none}", self.tv)
 
     def test_no_alert_builder(self) -> None:
         # Strictly a pending-order page: no /alert or /ccalert UI.

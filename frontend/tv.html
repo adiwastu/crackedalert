@@ -29,7 +29,6 @@ details{margin-top:8px}
 details summary{font-size:12px;color:#666;cursor:pointer}
 details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radius:4px;padding:6px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
 #trade-card{display:none}
-#builder{display:none}
 .hint{font-size:12px;color:#666;margin-top:4px}
 #tv-status{font-size:13px;color:#00703c;margin-top:10px;min-height:18px}
 #tv-formats{margin-top:8px}
@@ -38,7 +37,7 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 .fmt-val{font-family:monospace;font-size:10px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;color:#333}
 </style>
 
-<h1>Cracked Alert <b>v2.0.42</b> — TradingView import</h1>
+<h1>Cracked Alert <b>v2.0.43</b> — TradingView import</h1>
 
 <section>
   <div id="tv-paste" tabindex="0" onclick="this.focus()">
@@ -76,7 +75,7 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 </section>
 
 <section id="builder">
-  <div class="hint" style="margin-bottom:8px">Pending order only — the drawing is your plan; the /p order sits at the broker until filled.</div>
+  <div class="hint" style="margin-bottom:8px">Pending order only — the drawing is your plan; the /p order sits at the broker until filled. Paste a Risk/Reward drawing above to fill this form.</div>
   <div class="row">
     <div><label>Widen</label><select id="tv-widen" onchange="refresh()"><option value="n">No</option><option value="y">Yes</option></select></div>
     <div><label>RR</label><select id="tv-rr" onchange="refresh()"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
@@ -308,7 +307,7 @@ function fillTrade(clip){
   $('dir-long').classList.toggle('active',t.dir==='long');
   $('dir-short').classList.toggle('active',t.dir==='short');
   $('trade-card').style.display='';
-  $('builder').style.display='';
+  $('builder').style.display='';   // no-op: the builder is always visible
 
   // --- prefills from the drawing ---
   const e=parseFloat(t.entry),s=parseFloat(t.sl),tp=parseFloat(t.tp);
@@ -363,6 +362,9 @@ function updateReadout(){
   const rrSel=parseFloat($('tv-rr').value);
   const dir=S.dir;
   const lines=[];
+  if(e==null||s==null||isNaN(e)||isNaN(s)){
+    lines.push('Paste a TradingView Risk/Reward drawing to fill this form.');
+  }
   if(e!=null&&s!=null&&!isNaN(e)&&!isNaN(s)&&Math.abs(e-s)>1e-9){
     const dist=Math.abs(e-s);
     const slOk=dir==='long'?s<e:s>e;
