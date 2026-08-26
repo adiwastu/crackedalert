@@ -31,11 +31,26 @@ Caddy). The deployed package is a *copied* install in the venv
 **Versioning convention:** every code ship bumps the static patch version in
 **both** `pyproject.toml` (`version =`) and `src/crackedalert/__init__.py`
 (`__version__`). Runtime version is `v2.<commit count>` (git-derived). Current
-release: **2.0.30** (committed — **NOT yet deployed**; VPS is on 2.0.25).
+release: **2.0.31** (committed — **NOT yet deployed**; VPS is on 2.0.30).
 
 ---
 
-## 2. THE OPEN BUG — `/m` fails: "could not fetch balance for demo"
+## 2. THE OPEN BUG — `/m` fails: "could not fetch balance for demo" ✅ **SOLVED in v2.0.31**
+
+> **ROOT CAUSE (found 2026-08-26):** `_recv_loop` awaited event handlers
+> inline, so the tick → alert-fire → `confirm_position` chain (a zombie
+> `CROSSING_UP` entry alert re-firing every tick, reconciling forever)
+> blocked response correlation on the feed connection. Every request on
+> that connection timed out while spots/trendbars kept flowing — exactly
+> the observed forensics. Keepalive (2.0.21) and request serialization
+> (2.0.29) were real fixes for *other* problems but not this one.
+>
+> **FIX:** the trade auto-alert chain (entry/tp/sl + reconcile-based
+> confirmation) was removed entirely in v2.0.31 (user decision: broker-side
+> SL/TP made it notification-only), and `_recv_loop` now enqueues frames to
+> a dispatch worker so handler work can never stall correlation again.
+> CC guards are preserved (pending-order guards materialize from the
+> ExecutionEvent stream via a `pending_cc` registry).
 
 **Symptom (user-reported, market open):**
 
@@ -110,19 +125,15 @@ behavior that always works.
 
 ### 2.4 PENDING ACTIONS (in order — the person continuing should do these)
 
-1. **Fastest confirmation:** deploy first (the running 2.0.25 still refuses
-   `/cancel` on auto alerts — that's how the zombies got stranded), then
-   in Telegram:
-   ```
-   /cancel 9AG3
-   /cancel 4KF1
-   /m 4634.28 n 2 2 demo --smart-sl 4636.687
-   ```
-   If `/m` works → the concurrent-reconcile-spam mechanism is confirmed.
-   (Pre-deploy alternative: delete the rows directly —
-   `sqlite3 /etc/cracked_alert/cracked.db "DELETE FROM alerts WHERE id IN ('9AG3','4KF1');"`)
-2. **Deploy the fix:** `cd ~/crackedalert && sudo ./deploy_v2.sh` (installs
-   2.0.30 with request serialization + auto-alert cancel). Retry `/m`.
+1. **Deploy v2.0.31:** `cd ~/crackedalert && sudo ./deploy_v2.sh`.
+2. **Verify:** `/positions demo`, `/orders demo` and `/m …` must now work
+   immediately — and keep working (the deadlock class is gone). The startup
+   log should show `purged N legacy auto trade alert(s)` once, clearing any
+   remaining zombie rows.
+3. **Probe tool note:** `bin/probe_trader.py` still account-auths the demo
+   account. Running it kicks the *bot's* account session on that account —
+   don't run it against an environment while the bot is expected to trade
+   there (this likely contributed to earlier confusion).
 3. **Confirm the mechanism with the probe:** the probe now has a
    `CONCURRENT REQUESTS` section (sends trendbar+trader and reconcile+trader
    back-to-back without awaiting):
@@ -165,6 +176,7 @@ single/dual/aged/concurrent configuration the bot doesn't replicate.
 | 2.0.27–28 | Probe: symbol lookups, age test, dual connections, `ca-N` ids |
 | 2.0.29 | **Request serialization** (per-client lock) — see 2.3. **NOT yet deployed** |
 | 2.0.30 | `/cancel` now deletes ANY alert owned by the chat, incl. auto entry/tp/sl — stale zombie entry alerts (`9AG3`/`4KF1`) are finally user-cancellable |
+| 2.0.31 | **Auto-alert chain removed** (root cause of the demo deadlock); recv-loop decoupled via dispatch worker; CC guards kept (`pending_cc` registry for pending fills); legacy auto rows purged at startup |
 
 Android app: `android/` committed with debug APK; built locally with
 JDK 21 (`C:\Android\jdk-21`) + Android SDK (`C:\Android\sdk`) + cached
@@ -216,11 +228,10 @@ Gradle 8.13 / AGP 8.13.2; rebuild with `android\gradlew.bat assembleDebug`.
 
 ## 5. Open items / leftovers
 
-- **2.0.29 deploy + `/m` verification** (the whole point — see 2.4).
-- Stale entry alerts `9AG3`/`4KF1` still active (cancel via `/cancel`).
-  Consider a give-up/backoff policy for entry-alert confirmation retries
-  (intentionally NOT changed — "keep retrying" is the safe behavior for a
-  trading bot; the current constant per-tick retry is what spams reconciles).
+- **v2.0.31 deploy + `/m` verification** — see 2.4. This closes the bug.
+- Pending-order cc guards registered in `pending_cc` are in-memory only: a
+  restart between `/p` placement and fill drops the guard registration
+  (documented; re-attach via `/ccalert`).
 - Untracked, deliberately uncommitted: `.reasonix/`, `SESSION_RECAP.md`,
   `implementation_plan.md`, `reasonix.toml` (user hasn't asked to commit them).
 - Android app: only debug APK exists; release signing (keystore) not set up.

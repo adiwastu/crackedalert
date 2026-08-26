@@ -197,6 +197,9 @@ class CTraderClient:
                 async with websockets.connect(self._url, ssl=ctx,
                                               ping_interval=None) as ws:
                     self._ws = ws
+                    # Fresh per-connection dispatch queue: stale events from
+                    # a dropped link must never leak into the new session.
+                    self._dispatch_q = asyncio.Queue()
                     log.info("[%s] connected, authenticating app",
                              self.environment)
                     await self._app_auth()
@@ -208,6 +211,7 @@ class CTraderClient:
                     # whose responses only the recv loop can deliver. Starting
                     # it afterwards deadlocks every request until it times out.
                     receiver = loop.create_task(self._recv_loop(ws))
+                    dispatcher = loop.create_task(self._dispatch_loop())
                     try:
                         if self._on_connected is not None:
                             await self._with_receiver(
@@ -218,6 +222,7 @@ class CTraderClient:
                     finally:
                         heartbeat.cancel()
                         receiver.cancel()
+                        dispatcher.cancel()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -305,12 +310,28 @@ class CTraderClient:
                 # (execution events matter to both the requester and stream
                 # consumers); uncorrelated handlers must tolerate that.
 
-            for handler in self._handlers.get(pt, []):
-                try:
-                    await handler(payload)
-                except Exception:
-                    log.exception("[%s] event handler failed for pt=%s",
-                                  self.environment, pt)
+            # Handlers run OUTSIDE the recv loop (see _dispatch_loop): a
+            # handler that awaits anything -- a broker round-trip, a Telegram
+            # send -- must never stall response correlation. This was the
+            # root cause of the demo-link deadlock (HANDOFF.md 2.x).
+            if self._handlers.get(pt):
+                await self._dispatch_q.put((pt, payload))
+
+    async def _dispatch_loop(self) -> None:
+        """Deliver queued frames to event handlers, in arrival order."""
+        while True:
+            pt, payload = await self._dispatch_q.get()
+            try:
+                for handler in list(self._handlers.get(pt, [])):
+                    try:
+                        outcome = handler(payload)
+                        if asyncio.iscoroutine(outcome):
+                            await outcome
+                    except Exception:
+                        log.exception("[%s] event handler failed for pt=%s",
+                                      self.environment, pt)
+            finally:
+                self._dispatch_q.task_done()
 
     async def _heartbeat(self) -> None:
         while True:

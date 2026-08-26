@@ -16,8 +16,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application
 
 from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
-                     CandleAlertStore, CANDLE_ABOVE, CANDLE_BELOW,
-                     CROSSING_UP, KIND_SL, KIND_TP, direction_for_side)
+                     CandleAlertStore, CANDLE_ABOVE, CANDLE_BELOW)
 from .alert_status import ActiveAlert, AlertStatusServer
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
@@ -150,23 +149,12 @@ async def _run_bot(settings: Settings) -> None:
 
     trader = TradingService(clients, markets, settings)
 
-    def on_execution(payload: dict) -> None:
-        """Map pending-order fills (orderId -> positionId) as they arrive on
-        the execution-event stream. confirm_position needs this to turn an
-        entry alert's orderId into the filled position."""
-        order = payload.get("order") or {}
-        position = payload.get("position") or {}
-        order_id = order.get("orderId")
-        position_id = position.get("positionId")
-        if position_id is None:
-            position_id = order.get("positionId")
-        if order_id is not None and position_id is not None:
-            trader.note_fill(order_id, position_id)
-            log.info("execution fill: order %s -> position %s",
-                     order_id, position_id)
-
-    for _env, cli in clients.items():
-        cli.add_event_handler(ct.PT_EXECUTION_EVENT, on_execution)
+    # Pending-order cc guards: params are registered here at placement time
+    # (Handlers._trade) and materialized when the fill's ExecutionEvent
+    # arrives on the stream. In-memory only: a restart between placement
+    # and fill drops the guard registration (the order itself still lives
+    # broker-side with its real SL/TP -- re-attach via /ccalert).
+    pending_cc: Dict[str, dict] = {}
 
     async def broadcast(text: str) -> None:
         """Send a message to every subscriber (auto trade alerts)."""
@@ -178,47 +166,45 @@ async def _run_bot(settings: Settings) -> None:
             except Exception:
                 log.warning("broadcast to chat %s failed", cid)
 
-    async def on_entry_hit(alert) -> None:
-        """Confirm the position exists, then create TP/SL auto-alerts."""
-        side = "BUY" if alert.direction == CROSSING_UP else "SELL"
-        position = await trader.confirm_position(
-            alert.account, alert.symbol, side, alert.target, alert.trade_id)
-        if position is None:
-            raise RuntimeError("position not found")
-        tp = position.get("takeProfit")
-        sl = position.get("stopLoss")
-        if tp is None or sl is None:
-            raise RuntimeError("position has no TP/SL")
-        pos_id = str(position.get("positionId"))
-        store.create(
-            alert.chat_id, alert.symbol, float(tp),
-            direction_for_side(side, "tp"),
-            "auto TP hit for trade %s" % pos_id,
-            kind=KIND_TP, trade_id=pos_id, account=alert.account,
-            broadcast=alert.broadcast)
-        store.create(
-            alert.chat_id, alert.symbol, float(sl),
-            direction_for_side(side, "sl"),
-            "auto SL hit for trade %s" % pos_id,
-            kind=KIND_SL, trade_id=pos_id, account=alert.account,
-            broadcast=alert.broadcast)
+    def _materialize_pending_cc(order_id, position_id) -> None:
+        spec = pending_cc.pop(str(order_id), None)
+        if spec is None or position_id is None:
+            return
+        try:
+            pos_id = int(position_id)
+        except (TypeError, ValueError):
+            log.warning("cc guard: fill for order %s has no usable "
+                        "positionId (%r)", order_id, position_id)
+            return
+        side = spec["direction"]
+        # BUY: guard fires if candle closes BELOW threshold; SELL: ABOVE.
+        cc_direction = CANDLE_BELOW if side == "BUY" else CANDLE_ABOVE
+        alert = candle_store.create(
+            spec["chat_id"], spec["symbol"], spec["timeframe"],
+            spec["cc_price"], cc_direction,
+            "cc guard for position %d" % pos_id,
+            action="close", position_id=pos_id,
+            account=spec["account"], broadcast=spec["broadcast"])
+        candle_feed.add_symbol(spec["symbol"], spec["timeframe"])
+        log.info("cc guard %s created on fill: pos=%d %s %s",
+                 alert.id, pos_id, spec["symbol"], spec["timeframe"])
 
-        # CC guard for pending orders: guard params were stored on the entry alert
-        if alert.cc_timeframe and alert.cc_price:
-            cc_direction = (CANDLE_BELOW if side == "BUY" else CANDLE_ABOVE)
-            cc_guard = candle_store.create(
-                alert.chat_id, alert.symbol, alert.cc_timeframe,
-                alert.cc_price, cc_direction,
-                "cc guard for position %s" % pos_id,
-                action="close", position_id=int(pos_id),
-                account=alert.account, broadcast=alert.broadcast)
-            candle_feed.add_symbol(alert.symbol, alert.cc_timeframe)
-            log.info("cc guard %s created on fill: pos=%s %s %s",
-                     cc_guard.id, pos_id, alert.symbol, alert.cc_timeframe)
-            await notify(alert.chat_id, fmt.cc_guard_set(cc_guard))
+    def on_execution(payload: dict) -> None:
+        """Create pending-order cc guards as fills stream in."""
+        order = payload.get("order") or {}
+        position = payload.get("position") or {}
+        order_id = order.get("orderId")
+        position_id = position.get("positionId")
+        if position_id is None:
+            position_id = order.get("positionId")
+        if order_id is not None:
+            _materialize_pending_cc(order_id, position_id)
+
+    for _env, cli in clients.items():
+        cli.add_event_handler(ct.PT_EXECUTION_EVENT, on_execution)
 
     engine = AlertEngine(store, notify, fmt.alert_fired,
-                         on_entry_hit=on_entry_hit, on_broadcast=broadcast)
+                         on_broadcast=broadcast)
     feed = FeedService(markets[feed_account.environment],
                        feed_account.ctid_account_id, engine)
     markets[feed_account.environment].add_tick_listener(feed.on_tick)
@@ -271,7 +257,8 @@ async def _run_bot(settings: Settings) -> None:
     handlers = Handlers(settings, store, feed, settings.trade_symbol,
                         trader=trader, candle_store=candle_store,
                         candle_feed=candle_feed,
-                        subscription_store=subscription_store)
+                        subscription_store=subscription_store,
+                        pending_cc=pending_cc)
     handlers.register(app)
 
     # P2: native command menu

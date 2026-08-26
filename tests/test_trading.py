@@ -458,55 +458,6 @@ class TradingServiceTests(unittest.TestCase):
         self.assertNotIn("takeProfit", sent)   # TP preserved (not sent)
 
 
-class ConfirmPositionTests(unittest.TestCase):
-    """Bug 1: confirm_position must map orderId -> positionId (fill map),
-    retry the reconcile, and match entry by a digits-derived tolerance."""
-
-    def setUp(self):
-        self.cli = FakeClient()
-        self.quote = Quote(bid=2449.8, ask=2450.0,
-                           updated_at=time.monotonic())
-        self.service = trading.TradingService(
-            clients={"demo": self.cli},
-            markets={"demo": FakeMarket(self.quote)},
-            settings=make_settings())
-
-    def test_maps_order_id_to_position_id(self):
-        self.service.note_fill(555, 1)
-        pos = run(self.service.confirm_position(
-            "demo", "XAUUSD", "BUY", 2450.0, "555"))
-        self.assertIsNotNone(pos)
-        self.assertEqual(pos["positionId"], 1)
-
-    def test_retries_reconcile_before_giving_up(self):
-        self.cli.reconcile_queue = [
-            {"position": [], "order": []},
-            self.cli.reconcile_payload,
-        ]
-        pos = run(self.service.confirm_position(
-            "demo", "XAUUSD", "BUY", 2450.0, ""))
-        self.assertIsNotNone(pos)
-        self.assertEqual(pos["positionId"], 1)
-
-    def test_returns_none_after_all_retries(self):
-        self.cli.reconcile_queue = [
-            {"position": [], "order": []}] * 3
-        pos = run(self.service.confirm_position(
-            "demo", "XAUUSD", "BUY", 2450.0, ""))
-        self.assertIsNone(pos)
-
-    def test_matches_entry_within_digits_tolerance(self):
-        # digits=2 tolerance ~1.1 for gold; entry 2450.5 matches 2450.0.
-        pos = run(self.service.confirm_position(
-            "demo", "XAUUSD", "BUY", 2450.5, ""))
-        self.assertIsNotNone(pos)
-
-    def test_no_match_when_entry_too_far(self):
-        pos = run(self.service.confirm_position(
-            "demo", "XAUUSD", "BUY", 2452.0, ""))
-        self.assertIsNone(pos)
-
-
 class SuccessMessageFormat(unittest.TestCase):
     def test_matches_bash_template(self):
         text = fmt.order_success(

@@ -10,7 +10,6 @@ LIVE_TRADING_ENABLED is the Phase 3 hard guard: orders on live accounts
 are refused until the Phase 5 cutover flips it.
 """
 
-import asyncio
 import logging
 import math
 from dataclasses import dataclass
@@ -25,8 +24,6 @@ log = logging.getLogger("crackedalert.trading")
 LIVE_TRADING_ENABLED = True           # Phase 5 cutover: live trading is on
 ORDER_TIMEOUT_SECONDS = 10.0
 MAGIC_LABEL = "crackedalert"          # cTrader has no magic numbers; label instead
-POSITION_CONFIRM_RETRIES = 3
-POSITION_CONFIRM_RETRY_DELAY = 0.5   # seconds between reconcile attempts
 
 
 class TradeRejected(Exception):
@@ -130,7 +127,6 @@ class TradingService:
         self._clients = clients      # env -> CTraderClient
         self._markets = markets      # env -> MarketData
         self._settings = settings
-        self._filled = {}            # orderId -> positionId (pending fills)
 
     async def execute(self, args, is_market: bool,
                       risk_usd: Optional[float] = None):
@@ -234,99 +230,7 @@ class TradingService:
                                       plan, volume)
         log.info("placing order: %r", payload)
         result = await place_order(cli, payload)
-        # Record the fill mapping when the order response already carries
-        # both ids (some brokers echo positionId on the order event). The
-        # PT_EXECUTION_EVENT stream handler in main.py covers the rest.
-        if result.order_id is not None and result.position_id is not None:
-            self.note_fill(result.order_id, result.position_id)
         return plan, symbol, result, volume_to_lots(volume, symbol)
-
-    # ------------------------------------------------------------------
-    # pending-fill tracking (orderId -> positionId)
-    # ------------------------------------------------------------------
-    def note_fill(self, order_id, position_id) -> None:
-        """Record which position a pending order filled into. Called from
-        the bot event loop when an ExecutionEvent carries both ids."""
-        if order_id is None or position_id is None:
-            return
-        self._filled[int(order_id)] = int(position_id)
-
-    def filled_position_id(self, order_id) -> Optional[int]:
-        """Look up the positionId a pending order filled into, if seen."""
-        if not order_id:
-            return None
-        return self._filled.get(int(order_id))
-
-    # ------------------------------------------------------------------
-    # entry confirmation (for trade auto-alerts)
-    # ------------------------------------------------------------------
-    async def confirm_position(self, account_code: str, symbol_name: str,
-                               side: str, entry_target: float,
-                               trade_id: str):
-        """Return the open position matching symbol/side (+ id or entry
-        proximity), or None. Used to confirm an 'entry' auto-alert before
-        creating TP/SL alerts. Raises TradeRejected for account/link errors.
-
-        Matching is hardened for the auto-alert flow:
-        - trade_id may be an orderId (pending fills): resolve it via
-          self._filled (orderId -> positionId) before comparing.
-        - positionId equality is compared as ints so an orderId string can
-          never false-match a positionId.
-        - entry-price tolerance is derived from the symbol's digits
-          (~1.5 pips), not a hardcoded 0.05.
-        - the reconcile is retried a few times: a just-filled pending order
-          may not appear in the very first snapshot.
-        """
-        account = self._settings.accounts.get(account_code)
-        if account is None:
-            raise TradeRejected(
-                "error: account '%s' not found." % account_code)
-        cli = self._clients[account.environment]
-        market: MarketData = self._markets[account.environment]
-        if not cli.connected:
-            raise TradeRejected(
-                "error: cTrader %s link is down, try again shortly."
-                % account.environment)
-
-        info = await market.ensure_symbol(account.ctid_account_id,
-                                          symbol_name)
-        symbol_id = info.symbol_id
-        # Pip size for typical metals (digits=2 -> 0.1), cushioned 1.5x and
-        # floored at a cent so exotic symbols never get a sub-tick tolerance.
-        tick = 10.0 ** -max(info.digits - 1, 1)
-        tolerance = max(1.5 * tick, 1.5 * 0.0003 * entry_target, 0.05)
-
-        want_position = self.filled_position_id(trade_id)
-        try:
-            trade_id_int = int(trade_id)
-        except (TypeError, ValueError):
-            trade_id_int = None
-
-        for attempt in range(POSITION_CONFIRM_RETRIES):
-            if attempt:
-                await asyncio.sleep(POSITION_CONFIRM_RETRY_DELAY)
-            _, payload = await cli.request(ct.PT_RECONCILE_REQ, {
-                "ctidTraderAccountId": account.ctid_account_id,
-            })
-            for item in payload.get("position", []):
-                trade = item.get("tradeData", {}) or {}
-                if int(trade.get("symbolId", 0)) != symbol_id:
-                    continue
-                if trade.get("tradeSide") != side:
-                    continue
-                pos_id = item.get("positionId")
-                try:
-                    pos_int = int(pos_id)
-                except (TypeError, ValueError):
-                    pos_int = None
-                if want_position is not None and pos_int == want_position:
-                    return item
-                if trade_id_int is not None and pos_int == trade_id_int:
-                    return item
-                entry = item.get("price")
-                if entry is not None and abs(entry - entry_target) <= tolerance:
-                    return item
-        return None
 
     # ------------------------------------------------------------------
     # account balance (for /help)

@@ -250,11 +250,14 @@ class Handlers:
     def __init__(self, settings: Settings, store: alerts_mod.AlertStore,
                  feed, trade_symbol: str, trader=None,
                  candle_store=None, candle_feed=None,
-                 subscription_store: Optional[SubscriptionStore] = None):
+                 subscription_store: Optional[SubscriptionStore] = None,
+                 pending_cc: Optional[dict] = None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
         # candle_store: CandleAlertStore; candle_feed: CandleFeed
         # subscription_store: dynamic chat allow-list
+        # pending_cc: shared dict (main.py) registering pending-order cc
+        #   guard params; materialized on fill by main.on_execution
         self._settings = settings
         self._store = store
         self._feed = feed
@@ -263,6 +266,7 @@ class Handlers:
         self._candle_store = candle_store
         self._candle_feed = candle_feed
         self._subscriptions = subscription_store
+        self._pending_cc = pending_cc
 
     def register(self, app: Application) -> None:
         # un-gated commands
@@ -450,10 +454,9 @@ class Handlers:
             await self._reply(update, fmt.positions_error(
                 account, "internal error"))
             return
-        # cancel auto TP/SL alerts for every closed position
+        # clean up cc guards for every closed position
         for r in results:
             if r.get("ok") and r.get("id") is not None:
-                self._store.cancel_auto(str(r["id"]))
                 if self._candle_store is not None:
                     self._candle_store.cancel_for_position(int(r["id"]))
         await self._reply(update, fmt.close_all_result(account, results))
@@ -486,8 +489,7 @@ class Handlers:
             await self._reply(update, fmt.close_error(
                 account, position_id, "internal error"))
             return
-        # cancel auto TP/SL alerts tied to the closed position
-        self._store.cancel_auto(str(position_id))
+        # clean up any cc guard tied to the closed position
         if self._candle_store is not None:
             n = self._candle_store.cancel_for_position(position_id)
             if n:
@@ -522,8 +524,6 @@ class Handlers:
             await self._reply(update, fmt.cancel_order_error(
                 account, order_id, "internal error"))
             return
-        # cancel the auto entry alert tied to the cancelled pending order
-        self._store.cancel_auto(str(order_id))
         await self._reply(update, fmt.cancel_order_success(account, order_id))
 
     async def breakeven(self, update: Update,
@@ -661,108 +661,60 @@ class Handlers:
             smart_sl=plan.smart_sl, smart_risk_usd=plan.smart_risk_usd,
             smart_risk_pct=plan.smart_risk_pct))
 
-        if is_market:
-            # Market fills are already in: the engine's entry alert would
-            # never fire on MID (entry = ask for BUY / bid for SELL), so
-            # skip it and create the TP/SL alerts for the open position now.
-            trade_id = str(result.position_id or result.order_id) \
-                if (result.position_id or result.order_id) else ""
-            self._create_tp_sl_alerts(update, plan, symbol.name, trade_id,
-                                      args.account,
-                                      broadcast=args.broadcast)
-            if args.cc_timeframe and args.cc_price is not None:
-                if self._candle_store is not None and self._candle_feed is not None:
-                    await self._attach_cc_guard(update, plan, args, result)
-                else:
+        if args.cc_timeframe and args.cc_price is not None:
+            if self._candle_store is not None and self._candle_feed is not None:
+                if not is_market and self._pending_cc is None:
                     await self._reply(update,
-                        "warning: cc guard requested but candle feed is not available.")
-        else:
-            # Pending: store guard params on entry alert; guard created in on_entry_hit
-            self._create_entry_alert(update, plan, symbol.name, result,
-                                     args.account,
-                                     cc_timeframe=args.cc_timeframe,
-                                     cc_price=args.cc_price,
-                                     broadcast=args.broadcast)
-            if args.cc_timeframe:
-                await self._reply(update, fmt.cc_guard_pending(args.cc_timeframe, args.cc_price))
-
-    def _create_entry_alert(self, update: Update, plan, symbol_name: str,
-                            result, account: str,
-                            cc_timeframe=None, cc_price=None,
-                            broadcast=False) -> None:
-        """Create an 'entry' auto-alert for a just-placed order. The engine
-        fires it when the entry is hit, confirms the position, then creates
-        TP/SL alerts broadcast to all subscribers."""
-        trade_id = str(result.position_id or result.order_id)
-        if not trade_id or trade_id == "0":
-            trade_id = ""
-        direction = alerts_mod.direction_for_side(plan.direction, "entry")
-        target = plan.placement_price if plan.placement_price is not None else plan.entry_ref
-        alert = self._store.create(
-            update.effective_chat.id, symbol_name, target, direction,
-            "auto entry %s %s" % (plan.direction, symbol_name),
-            kind=alerts_mod.KIND_ENTRY, trade_id=trade_id,
-            account=account,
-            cc_timeframe=cc_timeframe or "",
-            cc_price=cc_price or 0.0,
-            broadcast=broadcast)
-        log.info("auto entry alert %s created: %s %s trade=%s",
-                 alert.id, alert.symbol, alert.target, trade_id)
-
-    def _create_tp_sl_alerts(self, update: Update, plan, symbol_name: str,
-                             trade_id: str, account: str,
-                             broadcast=False) -> None:
-        """Create TP and SL auto-alerts for an already-open position
-        (market orders). Mirrors the engine's on_entry_hit flow so the
-        alert chain is identical whether the fill is instant (market) or
-        happens later on a pending entry."""
-        if not trade_id:
-            log.warning("tp/sl alerts skipped: no trade id for %s %s",
-                        plan.direction, symbol_name)
-            return
-        tp = alerts_mod.direction_for_side(plan.direction, "tp")
-        sl = alerts_mod.direction_for_side(plan.direction, "sl")
-        self._store.create(
-            update.effective_chat.id, symbol_name, plan.tp, tp,
-            "auto TP hit for trade %s" % trade_id,
-            kind=alerts_mod.KIND_TP, trade_id=trade_id,
-            account=account, broadcast=broadcast)
-        self._store.create(
-            update.effective_chat.id, symbol_name, plan.sl, sl,
-            "auto SL hit for trade %s" % trade_id,
-            kind=alerts_mod.KIND_SL, trade_id=trade_id,
-            account=account, broadcast=broadcast)
-        log.info("auto TP/SL alerts %s/%s created for %s %s trade=%s",
-                 tp, sl, plan.direction, symbol_name, trade_id)
+                        "warning: cc guard requested but the fill hook "
+                        "is unavailable -- use /ccalert after the fill.")
+                else:
+                    await self._attach_cc_guard(update, plan, args, result,
+                                                is_market)
+            else:
+                await self._reply(update,
+                    "warning: cc guard requested but candle feed is not available.")
 
     async def _attach_cc_guard(self, update: Update, plan,
-                               args: TradeArgs, result) -> None:
-        """Create the CC guard for a market order right after confirming the
-        position exists."""
-        # Fast path: the fill's positionId is already known (ExecutionEvent).
-        position = None
-        if result.position is not None and result.position_id:
-            position = result.position
-            position["positionId"] = result.position_id
-        if position is None:
-            try:
-                position = await self._trader.confirm_position(
-                    args.account, self._symbol, plan.direction,
-                    plan.entry_ref,
-                    str(result.order_id) if result.order_id else "")
-            except Exception:
-                log.exception("cc guard: confirm_position failed for %s", args.account)
-                await self._reply(update,
-                    "trade placed, but cc guard could not be set "
-                    "(position confirm failed \u2014 use /ccalert manually).")
-                return
+                               args: TradeArgs, result,
+                               is_market: bool) -> None:
+        """Attach a CC guard to a trade.
 
-        if position is None:
+        Market orders carry their position in the placement response, so
+        the guard is created immediately. Pending orders register their
+        guard params in the shared pending_cc registry; main.on_execution
+        materializes the guard when the fill's ExecutionEvent arrives.
+        """
+        if not is_market:
+            self._pending_cc[str(result.order_id)] = {
+                "chat_id": update.effective_chat.id,
+                "symbol": self._symbol,
+                "timeframe": args.cc_timeframe,
+                "cc_price": args.cc_price,
+                "direction": plan.direction,
+                "account": args.account,
+                "broadcast": args.broadcast,
+            }
             await self._reply(update,
-                "trade placed, but cc guard could not be set "
-                "(position not found after fill \u2014 use /ccalert manually).")
+                              fmt.cc_guard_pending(args.cc_timeframe,
+                                                   args.cc_price))
             return
 
+        # Market fast path: the fill's positionId is already known.
+        if result.position is None or not result.position_id:
+            log.warning("cc guard: no positionId on market fill for %s",
+                        args.account)
+            await self._reply(update,
+                "trade placed, but cc guard could not be set "
+                "(no positionId on the fill \u2014 use /ccalert manually).")
+            return
+        position = dict(result.position)
+        position["positionId"] = result.position_id
+
+        position_id = int(position.get("positionId", 0))
+        if position_id == 0:
+            await self._reply(update,
+                "trade placed, but cc guard could not be set (no positionId).")
+            return
         position_id = int(position.get("positionId", 0))
         if position_id == 0:
             await self._reply(update,

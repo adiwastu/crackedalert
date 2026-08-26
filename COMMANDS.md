@@ -68,7 +68,7 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 - Lots are **floored** to the broker's volume step so the stated risk % is never exceeded.
 - Rejects orders below the broker's minimum lot size.
 - Places the order with SL/TP and label `crackedalert`.
-- On success, creates an **auto entry alert** that fires when the entry is hit, confirms the position, then creates **auto TP and SL alerts** broadcast to all subscribers.
+- SL/TP are real broker-side orders -- results (fills, TP/SL hits) are visible in the cTrader app.
 - If a CC guard (`tf` + `guard_price`) is given, creates a candle-close guard that auto-closes the position when a candle closes past the guard price.
 
 **Error cases:**
@@ -126,7 +126,7 @@ Places a **pending** order (limit or stop) at an explicit entry price. The place
 - Infers LIMIT or STOP order type.
 - SL/TP/dist/lots are computed off the **placement price** (the actual fill), not the raw entry.
 - Places the order with `GOOD_TILL_CANCEL` time-in-force.
-- On success, creates an **auto entry alert** with the CC-guard params stored on it. When the entry fills, the guard is created automatically.
+- On success with a CC guard requested, replies with a "CC guard queued" message -- the guard activates automatically when the order fills.
 - If a CC guard was requested, replies with a "CC guard queued" message — the guard activates when the order fills.
 
 **Error cases:** Same as `/m`.
@@ -186,7 +186,6 @@ Closes one open position at its full volume.
 
 **Behavior:**
 - Closes the position at full volume.
-- Cancels any auto TP/SL alerts tied to that position.
 - Cancels any CC guards tied to that position.
 
 **Error cases:**
@@ -218,7 +217,7 @@ Closes **every** open position on the account.
 
 **Behavior:**
 - Closes all positions, reporting per-position success/failure.
-- Cancels auto TP/SL alerts and CC guards for every closed position.
+- Cancels CC guards for every closed position.
 
 ---
 
@@ -245,8 +244,7 @@ Cancels one working (pending) order.
 ```
 
 **Behavior:**
-- Cancels the pending order.
-- Cancels the auto entry alert tied to that order.
+- Cancels the pending order at the broker.
 
 ---
 
@@ -395,15 +393,14 @@ Lists all active manual alerts for the calling chat.
 ```
 
 **Behavior:**
-- Shows each alert as `(ID) [tag] SYMBOL @ TARGET - notes`.
-- Tags: `[entry]`, `[TP]`, `[SL]` for auto trade alerts; no tag for manual alerts.
+- Shows each alert as `(ID) SYMBOL @ TARGET - notes`.
 - If none: `no active alerts.`
 
 ---
 
 ### `/cancel` — Cancel an Alert
 
-Deletes an alert owned by the calling chat -- manual **and** auto trade alerts (entry/tp/sl).
+Deletes an alert owned by the calling chat.
 
 **Syntax:**
 ```
@@ -423,9 +420,8 @@ Deletes an alert owned by the calling chat -- manual **and** auto trade alerts (
 ```
 
 **Behavior:**
-- Deletes any alert owned by this chat. Auto trade alerts (entry/tp/sl) are included since v2.0.30 — use this to kill stale entry alerts from unfilled pending orders.
+- Deletes manual price alerts owned by this chat.
 - Ownership is enforced: another subscriber's alerts are not visible to `/cancel`.
-- Removing a TP/SL auto alert only stops its Telegram notification chain; the broker-side SL/TP on the position is untouched.
 - Success: `alert <ID> cancelled.`
 - Not found: `id <ID> not found or doesn't belong to you.`
 
@@ -539,12 +535,19 @@ Removes the calling chat from the dynamic allow-list. **Not gated** — anyone c
 
 ---
 
-### Auto Trade Alerts (system-generated, not user commands)
+### Trade Results & CC Guards
 
-When a trade is placed via `/m` or `/p`, the bot automatically creates internal alerts:
+Since v2.0.31 the bot no longer generates internal trade alerts (`entry`/`tp`/`sl`). Fills and TP/SL executions arrive as cTrader push events; results are visible in the cTrader app. Broker-side SL/TP on every order are unaffected.
 
-| Kind | Fires when | Behavior |
-|---|---|---|
+**CC guards** (candle-close position auto-close) remain fully supported:
+- Created immediately for `/m` used with a `tf` + `guard_price`.
+- Queued for `/p` orders and activated automatically when the order fills.
+- BUY positions: guard fires if a candle closes **below** the guard price.
+- SELL positions: guard fires if a candle closes **above** the guard price.
+- On fire, the position is auto-closed and all subscribers are notified.
+- If the position is already gone (SL/TP hit), the guard is removed with a notice.
+
+---|---|---|
 | `entry` | Entry price is hit | Confirms the position exists, then creates TP + SL alerts. Broadcast to all subscribers. |
 | `tp` | Take-profit price is hit | Broadcast to all subscribers, then deleted. |
 | `sl` | Stop-loss price is hit | Broadcast to all subscribers, then deleted. |

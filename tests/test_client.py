@@ -180,6 +180,38 @@ class ConnectionLifecycle(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0]["symbolId"], 41)
 
+    def test_blocking_handler_does_not_stall_correlation(self):
+        """Deadlock regression (HANDOFF 2.x): the old recv loop awaited
+        event handlers inline, so a handler doing request/response work
+        blocked delivery of every other response on that connection --
+        the demo link wedged permanently while a zombie entry alert
+        re-fired per tick. The dispatch queue decouples them: a parked
+        spot handler must not stop a concurrent trader request."""
+        ws = FakeWS()
+
+        async def scenario():
+            with mock.patch.object(ct.websockets, "connect", FakeConnect(ws)):
+                cli = self._client(ws)
+                gate = asyncio.Event()
+
+                async def slow_handler(payload):
+                    await gate.wait()   # simulates a broker round-trip
+
+                cli.add_event_handler(ct.PT_SPOT_EVENT, slow_handler)
+                cli.start()
+                await cli.wait_ready(timeout=3)
+                await ws.push_event(ct.PT_SPOT_EVENT, {"symbolId": 41})
+                await asyncio.sleep(0.1)   # let the dispatcher park on it
+                # must resolve even though slow_handler is still parked:
+                pt, _payload = await cli.request(
+                    ct.PT_TRADER_REQ, {"ctidTraderAccountId": 1}, timeout=2)
+                self.assertEqual(pt, ct.PT_TRADER_RES)
+                gate.set()
+                await asyncio.sleep(0.2)   # let the dispatcher drain
+                await cli.stop()
+
+        run(scenario())
+
 
 if __name__ == "__main__":
     unittest.main()

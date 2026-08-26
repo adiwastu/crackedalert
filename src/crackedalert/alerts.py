@@ -1,16 +1,17 @@
 """Price alerts: SQLite-backed store + tick-driven crossing engine.
 
 Replaces cracked_alerts.tsv and the 5-second polling checker. Alerts fire
-off the live tick stream (bid/ask midpoint, the closest analog of the old
-M1 close) and are deleted after firing, matching the bash behavior.
+off the live tick stream (bid/ask midpoint) and are deleted after firing.
 
-Kind-aware: manual /alert (kind='manual') notifies the initiating chat.
-Trade auto-alerts (kind='entry'|'tp'|'sl') broadcast to every subscriber:
-an 'entry' alert, on hit, confirms the position actually exists, then
-creates 'tp' and 'sl' alerts from the position's real SL/TP.
+Manual /alert alerts notify the owning chat; --all alerts broadcast to
+every subscriber.
 
-CC (candle-close) guards: action='close' on CandleAlert triggers a
-position close callback instead of a notify.
+The former trade auto-alert chain (entry/tp/sl + reconcile-based position
+confirmation) was REMOVED in v2.0.31: it produced only Telegram
+notifications while its per-tick reconcile retries starved the recv loop
+and deadlocked request correlation on the feed connection (HANDOFF.md 2.x).
+Broker-side SL/TP never depended on it -- results are visible in the
+cTrader app. Legacy entry/tp/sl rows are purged at startup.
 """
 
 import logging
@@ -26,12 +27,8 @@ CROSSING_UP = "CROSSING_UP"
 CROSSING_DOWN = "CROSSING_DOWN"
 ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-# alert kinds
+# alert kinds (legacy 'entry'/'tp'/'sl' rows are purged at startup)
 KIND_MANUAL = "manual"
-KIND_ENTRY = "entry"
-KIND_TP = "tp"
-KIND_SL = "sl"
-AUTO_KINDS = (KIND_ENTRY, KIND_TP, KIND_SL)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS alerts (
@@ -59,16 +56,6 @@ CREATE INDEX IF NOT EXISTS idx_alerts_trade ON alerts(trade_id, kind);
 """
 
 
-def direction_for_side(side: str, hit_type: str) -> str:
-    """Crossing direction for a price-level alert on a BUY/SELL side.
-
-    entry/tp: BUY → CROSSING_UP, SELL → CROSSING_DOWN.
-    sl:        BUY → CROSSING_DOWN, SELL → CROSSING_UP.
-    """
-    up = (hit_type == "sl") != (side == "BUY")
-    return CROSSING_UP if up else CROSSING_DOWN
-
-
 @dataclass(frozen=True)
 class Alert:
     id: str
@@ -94,7 +81,7 @@ class AlertStore:
         self._db.commit()
 
     def _migrate(self) -> None:
-        """Add newer columns to pre-existing DBs (idempotent)."""
+        """Add newer columns to pre-existing DBs; purge legacy auto rows."""
         cols = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
         for col, ddl in (("kind", "TEXT NOT NULL DEFAULT 'manual'"),
                          ("trade_id", "TEXT NOT NULL DEFAULT ''"),
@@ -105,6 +92,12 @@ class AlertStore:
             if col not in cols:
                 self._db.execute(
                     "ALTER TABLE alerts ADD COLUMN %s %s" % (col, ddl))
+        # v2.0.31: the trade auto-alert chain is gone -- drop any legacy
+        # entry/tp/sl rows so they can never fire again.
+        cur = self._db.execute("DELETE FROM alerts WHERE kind != ?",
+                               (KIND_MANUAL,))
+        if cur.rowcount:
+            log.info("purged %d legacy auto trade alert(s)", cur.rowcount)
 
     def close(self) -> None:
         self._db.close()
@@ -172,14 +165,6 @@ class AlertStore:
         self._db.commit()
         return cur.rowcount > 0
 
-    def cancel_auto(self, trade_id: str) -> int:
-        """Delete auto alerts (entry/tp/sl) tied to a trade_id. Returns count."""
-        cur = self._db.execute(
-            "DELETE FROM alerts WHERE trade_id = ? AND kind != ?",
-            (trade_id, KIND_MANUAL))
-        self._db.commit()
-        return cur.rowcount
-
     def delete(self, alert_id: str) -> None:
         self._db.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
         self._db.commit()
@@ -219,26 +204,22 @@ class AlertStore:
 
 Notifier = Callable[[int, str], Awaitable[None]]  # (chat_id, text)
 Formatter = Callable[[Alert], str]
-OnEntryHit = Callable[[Alert], Awaitable[None]]   # raises if not confirmed
 Broadcaster = Callable[[str], Awaitable[None]]    # (text)
 
 
 class AlertEngine:
     """Consumes ticks, fires crossed alerts, deletes them.
 
-    Manual alerts notify the owning chat. Entry/tp/sl auto alerts broadcast
-    to every subscriber; an entry alert, on hit, is routed through
-    `on_entry_hit` which confirms the position and creates the tp/sl alerts.
+    Manual alerts notify the owning chat; --all (broadcast) alerts go to
+    every subscriber.
     """
 
     def __init__(self, store: AlertStore, notify: Notifier,
                  format_fired: Formatter,
-                 on_entry_hit: Optional[OnEntryHit] = None,
                  on_broadcast: Optional[Broadcaster] = None):
         self._store = store
         self._notify = notify
         self._format = format_fired
-        self._on_entry_hit = on_entry_hit
         self._on_broadcast = on_broadcast
 
     async def on_tick(self, symbol: str, bid: float, ask: float) -> None:
@@ -251,14 +232,7 @@ class AlertEngine:
                 continue
             log.info("alert %s fired: %s crossed %s (mid %.5f)",
                      alert.id, alert.symbol, alert.target, mid)
-            if alert.kind == KIND_ENTRY:
-                # entry alerts confirm the position (and create TP/SL auto
-                # alerts) before broadcasting; a --all entry alert still
-                # goes through confirm, then _fire_entry broadcasts.
-                await self._fire_entry(alert)
-            elif alert.kind in (KIND_TP, KIND_SL):
-                await self._fire_auto(alert)
-            elif alert.broadcast:
+            if alert.broadcast:
                 await self._fire_broadcast(alert)
             else:  # KIND_MANUAL
                 await self._fire_manual(alert)
@@ -279,23 +253,6 @@ class AlertEngine:
             log.exception("broadcast failed for alert %s -- keeping alert",
                           alert.id)
             return
-        self._store.delete(alert.id)
-
-    async def _fire_entry(self, alert: Alert) -> None:
-        if self._on_entry_hit is None:
-            self._store.delete(alert.id)
-            return
-        try:
-            await self._on_entry_hit(alert)   # confirm position + create tp/sl
-        except Exception:
-            log.exception("entry alert %s: position not confirmed yet -- "
-                          "keeping alert", alert.id)
-            return
-        await self._broadcast(alert)
-        self._store.delete(alert.id)
-
-    async def _fire_auto(self, alert: Alert) -> None:
-        await self._broadcast(alert)
         self._store.delete(alert.id)
 
     async def _broadcast(self, alert: Alert) -> None:

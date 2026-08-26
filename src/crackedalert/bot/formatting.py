@@ -11,7 +11,7 @@ from html import escape as _html_escape
 from typing import List, Optional
 
 from ..alerts import (CANDLE_ABOVE, CANDLE_BELOW, CROSSING_UP, Alert,
-                      CandleAlert, KIND_ENTRY, KIND_SL, KIND_TP)
+                      CandleAlert)
 
 
 
@@ -157,22 +157,11 @@ def no_alerts() -> str:
     return "no active alerts."
 
 
-def _alert_tag(alert: Alert) -> str:
-    if alert.kind == KIND_ENTRY:
-        return "[entry]"
-    if alert.kind == KIND_TP:
-        return "[TP]"
-    if alert.kind == KIND_SL:
-        return "[SL]"
-    return ""
-
-
 def alert_list(alerts: List[Alert]) -> str:
     lines = ["active alerts:"]
     for a in alerts:
-        tag = _alert_tag(a)
-        lines.append("(%s) %s %s @ %s - %s"
-                     % (esc(a.id), esc(tag), esc(a.symbol), _trim(a.target),
+        lines.append("(%s) %s @ %s - %s"
+                     % (esc(a.id), esc(a.symbol), _trim(a.target),
                         esc(a.message)))
     return "\n".join(lines)
 

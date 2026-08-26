@@ -312,114 +312,7 @@ class CandleEngineTests(unittest.TestCase):
         self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
 
 
-class DirectionForSideTests(unittest.TestCase):
-    def test_entry_and_tp(self):
-        self.assertEqual(alerts.direction_for_side("BUY", "entry"),
-                         alerts.CROSSING_UP)
-        self.assertEqual(alerts.direction_for_side("SELL", "entry"),
-                         alerts.CROSSING_DOWN)
-        self.assertEqual(alerts.direction_for_side("BUY", "tp"),
-                         alerts.CROSSING_UP)
-        self.assertEqual(alerts.direction_for_side("SELL", "tp"),
-                         alerts.CROSSING_DOWN)
-
-    def test_sl_opposite(self):
-        self.assertEqual(alerts.direction_for_side("BUY", "sl"),
-                         alerts.CROSSING_DOWN)
-        self.assertEqual(alerts.direction_for_side("SELL", "sl"),
-                         alerts.CROSSING_UP)
-
-
-class AutoAlertEngineTests(unittest.TestCase):
-    def setUp(self):
-        self.store = alerts.AlertStore(":memory:")
-        self.broadcast = []
-        self.entry_hits = []
-
-        async def notify(chat_id, text):
-            raise AssertionError("manual notify should not be called")
-
-        async def broadcast(text):
-            self.broadcast.append(text)
-
-        async def on_entry_hit(alert):
-            self.entry_hits.append(alert)
-            self.store.create(
-                alert.chat_id, alert.symbol, 2480.0,
-                alerts.direction_for_side("BUY", "tp"),
-                "TP", kind=alerts.KIND_TP, trade_id="9",
-                account=alert.account)
-            self.store.create(
-                alert.chat_id, alert.symbol, 2440.0,
-                alerts.direction_for_side("BUY", "sl"),
-                "SL", kind=alerts.KIND_SL, trade_id="9",
-                account=alert.account)
-
-        self.engine = alerts.AlertEngine(
-            self.store, notify, fmt.alert_fired,
-            on_entry_hit=on_entry_hit, on_broadcast=broadcast)
-
-    def tearDown(self):
-        self.store.close()
-
-    def test_entry_fires_creates_tp_sl_and_broadcasts(self):
-        self.store.create(111, "XAUUSD", 2450.0,
-                          alerts.CROSSING_UP, "entry",
-                          kind=alerts.KIND_ENTRY, trade_id="9",
-                          account="live")
-        run(self.engine.on_tick("XAUUSD", 2450.0, 2450.4))   # mid 2450.2
-        self.assertEqual(len(self.entry_hits), 1)
-        self.assertEqual(len(self.broadcast), 1)              # entry hit broadcast
-        rows = self.store.for_chat(111)
-        kinds = {r.kind for r in rows}
-        self.assertEqual(kinds, {alerts.KIND_TP, alerts.KIND_SL})
-
-    def test_broadcast_entry_confirms_then_broadcasts(self):
-        # regression: broadcast flag must NOT shadow the entry path. A --all
-        # entry alert still goes through on_entry_hit (confirm + create TP/SL)
-        # before the entry hit is broadcast to every subscriber.
-        self.store.create(111, "XAUUSD", 2450.0,
-                          alerts.CROSSING_UP, "entry",
-                          kind=alerts.KIND_ENTRY, trade_id="9",
-                          account="live", broadcast=True)
-        run(self.engine.on_tick("XAUUSD", 2450.0, 2450.4))   # mid 2450.2
-        self.assertEqual(len(self.entry_hits), 1)             # confirmed
-        self.assertEqual(len(self.broadcast), 1)              # then broadcast
-        rows = self.store.for_chat(111)
-        kinds = {r.kind for r in rows}
-        self.assertEqual(kinds, {alerts.KIND_TP, alerts.KIND_SL})
-
-    def test_entry_not_confirmed_keeps_alert(self):
-        store = alerts.AlertStore(":memory:")
-        sent = []
-
-        async def notify(chat_id, text):
-            pass
-
-        async def broadcast(text):
-            sent.append(text)
-
-        async def on_entry_hit(alert):
-            raise RuntimeError("position not found")
-
-        engine = alerts.AlertEngine(
-            store, notify, fmt.alert_fired,
-            on_entry_hit=on_entry_hit, on_broadcast=broadcast)
-        store.create(111, "XAUUSD", 2450.0, alerts.CROSSING_UP, "e",
-                     kind=alerts.KIND_ENTRY, trade_id="9")
-        run(engine.on_tick("XAUUSD", 2450.0, 2450.4))
-        self.assertEqual(sent, [])                            # no broadcast
-        self.assertEqual(len(store.for_chat(111)), 1)         # kept
-        store.close()
-
-    def test_tp_fires_broadcasts_and_deletes(self):
-        self.store.create(111, "XAUUSD", 2480.0,
-                          alerts.CROSSING_UP, "TP",
-                          kind=alerts.KIND_TP, trade_id="9")
-        run(self.engine.on_tick("XAUUSD", 2480.0, 2480.4))
-        self.assertEqual(len(self.broadcast), 1)
-        self.assertEqual(self.store.for_chat(111), [])        # deleted
-
+class ManualEngineTests(unittest.TestCase):
     def test_manual_still_notifies_owning_chat(self):
         store = alerts.AlertStore(":memory:")
         sent = []
@@ -442,41 +335,24 @@ class AutoAlertStoreTests(unittest.TestCase):
     def tearDown(self):
         self.store.close()
 
-    def test_cancel_owner_any_kind(self):
-        """The owning chat can /cancel manual AND auto trade alerts.
-
-        Stale auto entry alerts (unfilled pending orders) previously could
-        not be removed by anyone -- /cancel filtered kind='manual' and
-        /close or /cancel_order need a working broker round-trip first."""
-        self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP, "m")
-        auto = self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP,
-                                 "e", kind=alerts.KIND_ENTRY, trade_id="9")
-        tp = self.store.create(1, "XAUUSD", 2480.0, alerts.CROSSING_UP,
-                               "tp", kind=alerts.KIND_TP, trade_id="9")
-        # ownership is still enforced for every kind
-        self.assertFalse(self.store.cancel(auto.id, 999))
-        self.assertFalse(self.store.cancel(auto.id.lower(), 999))
-        self.assertEqual(len(self.store.for_chat(1)), 3)
-        # the owner can now cancel auto alerts directly
-        self.assertTrue(self.store.cancel(auto.id, 1))
-        self.assertEqual(len(self.store.for_chat(1)), 2)
-        self.assertTrue(self.store.cancel(tp.id, 1))
-        # manual alerts keep working as before
-        m = self.store.for_chat(1)[0]
-        self.assertEqual(m.kind, alerts.KIND_MANUAL)
-        self.assertTrue(self.store.cancel(m.id, 1))
-        self.assertEqual(self.store.for_chat(1), [])
-        # already-deleted ids report not found
-        self.assertFalse(self.store.cancel(auto.id, 1))
-
-    def test_cancel_auto_by_trade_id(self):
-        self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP, "m")
-        self.store.create(1, "XAUUSD", 2480.0, alerts.CROSSING_UP, "tp",
-                          kind=alerts.KIND_TP, trade_id="9")
-        self.store.create(1, "XAUUSD", 2440.0, alerts.CROSSING_DOWN, "sl",
-                          kind=alerts.KIND_SL, trade_id="9")
-        self.assertEqual(self.store.cancel_auto("9"), 2)
-        self.assertEqual(len(self.store.for_chat(1)), 1)
+    def test_startup_purges_legacy_auto_rows(self):
+        """v2.0.31 removed the trade auto-alert chain: legacy entry/tp/sl
+        rows must be purged on the first open so they can never fire again."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "alerts.db")
+            s = alerts.AlertStore(path)
+            # raw SQL: the KIND_* constants no longer exist in the module
+            s._db.execute(
+                "INSERT INTO alerts VALUES ('ZZZ9', 1, 'XAUUSD', 2450.0, "
+                "'CROSSING_UP', 'entry', strftime('%s','now'), 'entry', "
+                "'9', 'demo', '', 0, 0)")
+            s._db.commit()
+            self.assertEqual(len(s.for_chat(1)), 1)   # present before reopen
+            s.close()
+            s2 = alerts.AlertStore(path)              # _migrate runs here
+            self.assertEqual(s2.for_chat(1), [])      # purged
+            s2.close()
 
     def test_migration_adds_columns(self):
         import sqlite3
@@ -679,11 +555,9 @@ class AlertStoreGuardFieldTests(unittest.TestCase):
     def tearDown(self):
         self.store.close()
 
-    def test_entry_alert_with_cc_fields(self):
+    def test_cc_fields_round_trip(self):
         a = self.store.create(111, "XAUUSD", 2450.0,
-                              alerts.CROSSING_UP, "entry",
-                              kind=alerts.KIND_ENTRY, trade_id="9",
-                              account="demo",
+                              alerts.CROSSING_UP, "note",
                               cc_timeframe="M15", cc_price=4080.0)
         rows = self.store.for_symbol("XAUUSD")
         self.assertEqual(len(rows), 1)
@@ -714,62 +588,6 @@ class AlertStoreGuardFieldTests(unittest.TestCase):
             self.assertEqual(rows[0].cc_timeframe, "")
             self.assertEqual(rows[0].cc_price, 0.0)
             s.close()
-
-
-class HandlerTpSlTests(unittest.TestCase):
-    """Bug 2: a market order must create TP/SL alerts immediately -- the
-    engine's MID-based entry alert would never fire on ask/bid."""
-
-    def setUp(self):
-        self.store = alerts.AlertStore(":memory:")
-        self.handlers = handlers.Handlers(
-            settings=None, store=self.store, feed=None,
-            trade_symbol="XAUUSD")
-        self.plan = risk.TradePlan(
-            direction=risk.BUY, order_kind=risk.MARKET, entry_ref=2450.0,
-            placement_price=None, sl=2439.004, tp=2472.006,
-            dist=11.0, lots=0.04, risk_usd=50.0, widen_label="",
-            spread=0.2)
-
-    def tearDown(self):
-        self.store.close()
-
-    def test_market_creates_tp_and_sl_alerts(self):
-        class Chat:
-            id = 111
-
-        class Msg:
-            chat = Chat()
-
-        class Update:
-            effective_chat = Chat()
-            effective_message = Msg()
-
-        self.handlers._create_tp_sl_alerts(Update(), self.plan, "XAUUSD",
-                                           "1", "demo", broadcast=False)
-        rows = self.store.for_chat(111)
-        kinds = {r.kind for r in rows}
-        self.assertEqual(kinds, {alerts.KIND_TP, alerts.KIND_SL})
-        by_kind = {r.kind: r for r in rows}
-        self.assertAlmostEqual(by_kind[alerts.KIND_TP].target, 2472.006)
-        self.assertAlmostEqual(by_kind[alerts.KIND_SL].target, 2439.004)
-        self.assertEqual(by_kind[alerts.KIND_TP].direction,
-                         alerts.CROSSING_UP)
-        self.assertEqual(by_kind[alerts.KIND_SL].direction,
-                         alerts.CROSSING_DOWN)
-        self.assertEqual(by_kind[alerts.KIND_TP].trade_id, "1")
-        self.assertEqual(by_kind[alerts.KIND_SL].trade_id, "1")
-
-    def test_tp_sl_skipped_without_trade_id(self):
-        class Chat:
-            id = 111
-
-        class Update:
-            effective_chat = Chat()
-
-        self.handlers._create_tp_sl_alerts(Update(), self.plan, "XAUUSD",
-                                           "", "demo", broadcast=False)
-        self.assertEqual(self.store.for_chat(111), [])
 
 
 if __name__ == "__main__":
