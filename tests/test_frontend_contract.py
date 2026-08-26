@@ -15,6 +15,44 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 UI_PATH = ROOT / "frontend" / "ui.html"
+TV_PATH = ROOT / "frontend" / "tv.html"
+
+
+class TradingViewImportContractTest(unittest.TestCase):
+    """frontend/tv.html: TradingView clipboard import -> /m /p command.
+
+    The page must keep the clipboard parser, the doc's field extraction
+    (entry/stopLevel/profitLevel), and the current --smart-sl <price> <tf>
+    syntax so a future UI-only change can't silently regress them.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tv = TV_PATH.read_text(encoding="utf-8")
+
+    def test_version_bumped(self) -> None:
+        self.assertRegex(self.tv, r"v2\.0\.\d+")
+
+    def test_clipboard_parser_present(self) -> None:
+        self.assertIn("data-tradingview-clip", self.tv)
+        self.assertIn("parseTradingViewClip", self.tv)
+        self.assertIn("querySelector('[data-tradingview-clip]')", self.tv)
+
+    def test_field_extraction_present(self) -> None:
+        self.assertIn("points[0].price", self.tv)
+        self.assertIn("stopLevel", self.tv)
+        self.assertIn("profitLevel", self.tv)
+        self.assertIn("LineToolRiskRewardShort", self.tv)
+
+    def test_smart_sl_syntax_present(self) -> None:
+        self.assertIn("--smart-sl", self.tv)
+        self.assertIn("smart-tf", self.tv)
+        self.assertIn("M30", self.tv)
+
+    def test_builder_ids_present(self) -> None:
+        self.assertIn('id="tv-trade-cmd"', self.tv)
+        self.assertIn('id="tv-paste"', self.tv)
+        self.assertIn('id="tv-symbol"', self.tv)
 
 
 class FrontendContractTest(unittest.TestCase):

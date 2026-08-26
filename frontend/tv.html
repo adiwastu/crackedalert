@@ -1,0 +1,221 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cracked Alert — TradingView Import</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:16px;line-height:1.35;background:#fff;color:#111;max-width:430px;margin:0 auto;padding:14px}
+h1{font-size:13px;color:#666;margin-bottom:12px}
+h1 b{color:#111}
+section{border:1px solid #ddd;border-radius:8px;padding:12px;margin-bottom:14px}
+label{display:block;font-weight:700;font-size:13px;margin:8px 0 2px}
+input[type=number],input[type=text],select{width:100%;padding:8px;font-size:16px;border:1px solid #888;border-radius:4px}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+.inline{display:flex;align-items:center;gap:8px;margin-top:8px}
+.inline label{margin:0;font-weight:400}
+.cmd{font-family:monospace;font-size:14px;background:#f4f4f4;border:1px solid #ddd;border-radius:4px;padding:8px;margin:10px 0;word-break:break-all}
+button{display:block;width:100%;padding:11px;font-size:16px;font-weight:700;background:#111;color:#fff;border:none;border-radius:6px;cursor:pointer}
+button:focus-visible{outline:3px solid #ffdd00;outline-offset:-2px}
+button:disabled{opacity:.4}
+.readout{font-size:13px;color:#00703c;margin-top:6px}
+.err{font-size:13px;color:#b00020;margin-top:6px;white-space:pre-wrap;word-break:break-all}
+.seg{display:flex;margin-bottom:4px;border:1px solid #111}
+.seg button{flex:1;padding:8px;background:#fff;color:#111;border:none;border-right:1px solid #111;font-size:14px}
+.seg button:last-child{border-right:none}
+.seg button.active{background:#111;color:#fff}
+#tv-paste{border:2px dashed #888;border-radius:8px;padding:24px 12px;text-align:center;color:#666;font-size:14px;cursor:pointer}
+#tv-paste.hit{border-color:#00703c;color:#00703c}
+details{margin-top:8px}
+details summary{font-size:12px;color:#666;cursor:pointer}
+details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radius:4px;padding:6px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+#trade-card{display:none}
+#builder{display:none}
+.hint{font-size:12px;color:#666;margin-top:4px}
+</style>
+
+<h1>Cracked Alert <b>v2.0.34</b> — TradingView import</h1>
+
+<section>
+  <div id="tv-paste" onclick="document.getElementById('tv-file').click()">
+    Copy a <b>Risk/Reward</b> drawing in TradingView, then paste it here<br>
+    (or just paste anywhere on this page)
+  </div>
+  <input type="file" id="tv-file" accept="text/html" style="display:none" onchange="filePicked(this)">
+  <div class="err" id="tv-err"></div>
+</section>
+
+<section id="trade-card">
+  <div class="row">
+    <div><label>Symbol</label><input id="tv-symbol" type="text" oninput="refresh()"></div>
+    <div><label>Interval (info)</label><input id="tv-interval" type="text" readonly></div>
+  </div>
+  <div style="margin-top:8px"><label>Direction</label>
+    <div class="seg">
+      <button id="dir-long" onclick="setDir('long')">Long</button>
+      <button id="dir-short" onclick="setDir('short')">Short</button>
+    </div>
+  </div>
+  <div class="row">
+    <div><label>Entry</label><input id="tv-entry" type="number" step="0.01" oninput="refresh()"></div>
+    <div><label>Stop loss</label><input id="tv-sl" type="number" step="0.01" oninput="refresh()"></div>
+    <div><label>Take profit</label><input id="tv-tp" type="number" step="0.01" oninput="refresh()"></div>
+  </div>
+  <div class="hint" id="tv-title"></div>
+  <details>
+    <summary>Raw clipboard JSON (for debugging)</summary>
+    <pre id="tv-raw"></pre>
+  </details>
+</section>
+
+<section id="builder">
+  <div style="margin-bottom:4px"><label>Order type</label>
+    <div class="seg">
+      <button id="seg-pending" class="active" onclick="segCmd('pending')">Pending /p</button>
+      <button id="seg-market" onclick="segCmd('market')">Market /m</button>
+    </div>
+  </div>
+  <div class="row">
+    <div><label>Widen</label><select id="tv-widen" onchange="refresh()"><option value="n">No</option><option value="y">Yes</option></select></div>
+    <div><label>RR</label><select id="tv-rr" onchange="refresh()"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
+  </div>
+  <div class="row">
+    <div><label>Risk %</label><select id="tv-risk" onchange="refresh()"><option>0.25</option><option selected>0.5</option><option>0.75</option><option>1</option><option>1.5</option><option>2</option></select></div>
+    <div><label>Account</label><select id="tv-acct" onchange="refresh()"><option value="live100k">live100k</option><option value="demo">demo</option></select></div>
+  </div>
+  <div class="inline"><input id="tv-ss-on" type="checkbox" onchange="refresh()"><label for="tv-ss-on">Soft stop (--smart-sl)</label></div>
+  <div class="row" id="tv-ss-fields" style="display:none">
+    <div><label>Smart SL price</label><input id="tv-ss" type="number" step="0.01" oninput="refresh()"></div>
+    <div><label>Candle TF</label><select id="smart-tf" onchange="refresh()"><option>M1</option><option selected>M5</option><option>M15</option><option>M30</option><option>H1</option></select></div>
+  </div>
+  <div class="hint">Soft stop: closes the position when a candle of that TF CLOSES past the level. Broker-side SL stays at your original level.</div>
+  <div class="inline"><input id="tv-cc-on" type="checkbox" onchange="refresh()"><label for="tv-cc-on">CC guard pair (&lt;tf&gt; &lt;price&gt;)</label></div>
+  <div class="row" id="tv-cc-fields" style="display:none">
+    <div><label>Guard TF</label><select id="tv-cc-tf" onchange="refresh()"><option>M5</option><option>M15</option><option selected>M30</option><option>H1</option><option>H4</option><option>D1</option></select></div>
+    <div><label>Guard price</label><input id="tv-cc-price" type="number" step="0.01" oninput="refresh()"></div>
+  </div>
+  <div class="inline"><input id="tv-all" type="checkbox" onchange="refresh()"><label for="tv-all">Alert all subscribers (--all)</label></div>
+  <div class="cmd" id="tv-trade-cmd"></div>
+  <button onclick="copyCmd()" id="tv-copy">Copy command</button>
+  <div class="readout" id="tv-readout"></div>
+</section>
+
+<script>
+const S={orderType:'pending',dir:'long'};
+let CLIP=null;
+
+function $(id){return document.getElementById(id);}
+function copyCmd(){
+  const cmd=$('tv-trade-cmd').textContent;
+  navigator.clipboard.writeText(cmd).catch(()=>{
+    const t=document.createElement('textarea');t.value=cmd;t.style.cssText='position:fixed;opacity:0';
+    document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);
+  });
+  $('tv-readout').textContent='Copied: '+cmd;
+}
+
+function segCmd(kind){
+  S.orderType=kind;
+  $('seg-pending').classList.toggle('active',kind==='pending');
+  $('seg-market').classList.toggle('active',kind==='market');
+  refresh();
+}
+function setDir(d){
+  S.dir=d;
+  $('dir-long').classList.toggle('active',d==='long');
+  $('dir-short').classList.toggle('active',d==='short');
+  refresh();
+}
+
+// -------------------------------------------------------------
+// TradingView clipboard parsing (see FROM_TRADINGVIEW_COPY.md)
+// -------------------------------------------------------------
+document.addEventListener('paste',(e)=>{
+  const html=e.clipboardData.getData('text/html');
+  if(html){parseTradingViewClip(html);e.preventDefault();}
+});
+function filePicked(input){
+  if(!input.files.length)return;
+  input.files[0].text().then(parseTradingViewClip);
+}
+function parseTradingViewClip(html){
+  const err=$('tv-err');
+  err.textContent='';
+  if(!html||html.indexOf('data-tradingview-clip')<0){
+    err.textContent='No TradingView clipboard data found. Copy a Risk/Reward drawing in TradingView first.';
+    return;
+  }
+  const doc=new DOMParser().parseFromString(html,'text/html');
+  const span=doc.querySelector('[data-tradingview-clip]');
+  if(!span){err.textContent='Clipboard HTML found but no data-tradingview-clip element.';return;}
+  let clip;
+  try{clip=JSON.parse(span.getAttribute('data-tradingview-clip'));}
+  catch(x){err.textContent='Clipboard JSON parse failed:\n'+x.message+'\n\nRaw:\n'+html.slice(0,2000);return;}
+  CLIP=clip;
+  $('tv-raw').textContent=JSON.stringify(clip,null,2);
+  fillTrade(clip);
+}
+
+function extractTrade(clip){
+  // Direction per FROM_TRADINGVIEW_COPY.md: source.type is
+  // 'LineToolRiskRewardShort' or 'LineToolRiskRewardLong'.
+  const source=(clip&&clip.sources&&clip.sources[0]&&clip.sources[0].source)||{};
+  const type=String(source.type||'');
+  const symbolRaw=String(source.symbol||'');
+  const symbol=symbolRaw.includes(':')?symbolRaw.split(':').pop():symbolRaw;
+  const dir=type.includes('Short')?'short':(type.includes('Long')?'long':S.dir);
+  const entry=source.points&&source.points[0]?source.points[0].price:null;
+  return {
+    title:clip&&clip.title,
+    symbol:symbol,
+    interval:source.interval,
+    dir:dir,
+    entry:entry,
+    sl:source.stopLevel,
+    tp:source.profitLevel,
+    qty:source.qty,
+    amountStop:source.amountStop,
+    amountTarget:source.amountTarget,
+  };
+}
+
+function fillTrade(clip){
+  const t=extractTrade(clip);
+  $('tv-symbol').value=t.symbol||'';
+  $('tv-interval').value=(t.interval?t.interval+' min':'');
+  $('tv-entry').value=t.entry!=null?t.entry:'';
+  $('tv-sl').value=t.sl!=null?t.sl:'';
+  $('tv-tp').value=t.tp!=null?t.tp:'';
+  $('tv-title').textContent=(t.title?t.title+' · ':'')+
+    'qty '+t.qty+' · stop '+t.amountStop+' · target '+t.amountTarget;
+  S.dir=t.dir;
+  $('dir-long').classList.toggle('active',t.dir==='long');
+  $('dir-short').classList.toggle('active',t.dir==='short');
+  $('trade-card').style.display='';
+  $('builder').style.display='';
+  refresh();
+}
+
+// -------------------------------------------------------------
+// Command builder
+// -------------------------------------------------------------
+function refresh(){
+  $('tv-ss-fields').style.display=$('tv-ss-on').checked?'':'none';
+  $('tv-cc-fields').style.display=$('tv-cc-on').checked?'':'none';
+  const sl=$('tv-sl').value,entry=$('tv-entry').value;
+  const widen=$('tv-widen').value,rr=$('tv-rr').value,
+        risk=$('tv-risk').value,acct=$('tv-acct').value;
+  if(!sl){$('tv-trade-cmd').textContent='';$('tv-copy').disabled=true;return;}
+  const base=S.orderType==='market'
+    ?['/m',sl,widen,rr,risk,acct]
+    :(entry?['/p',entry,sl,widen,rr,risk,acct]:null);
+  if(!base){$('tv-trade-cmd').textContent='';$('tv-copy').disabled=true;return;}
+  const ss=$('tv-ss').value;
+  if($('tv-ss-on').checked&&ss)base.push('--smart-sl',ss,$('smart-tf').value);
+  else if($('tv-cc-on').checked&&$('tv-cc-price').value)
+    base.push($('tv-cc-tf').value,$('tv-cc-price').value);
+  if($('tv-all').checked)base.push('--all');
+  $('tv-trade-cmd').textContent=base.join(' ');
+  $('tv-copy').disabled=false;
+}
+refresh();
+</script>
