@@ -403,7 +403,7 @@ Lists all active manual alerts for the calling chat.
 
 ### `/cancel` — Cancel an Alert
 
-Deletes a manual alert owned by the calling chat.
+Deletes an alert owned by the calling chat -- manual **and** auto trade alerts (entry/tp/sl).
 
 **Syntax:**
 ```
@@ -423,7 +423,9 @@ Deletes a manual alert owned by the calling chat.
 ```
 
 **Behavior:**
-- Only deletes **manual** alerts owned by this chat. Auto trade alerts are system-managed and not user-cancellable.
+- Deletes any alert owned by this chat. Auto trade alerts (entry/tp/sl) are included since v2.0.30 — use this to kill stale entry alerts from unfilled pending orders.
+- Ownership is enforced: another subscriber's alerts are not visible to `/cancel`.
+- Removing a TP/SL auto alert only stops its Telegram notification chain; the broker-side SL/TP on the position is untouched.
 - Success: `alert <ID> cancelled.`
 - Not found: `id <ID> not found or doesn't belong to you.`
 

@@ -157,11 +157,18 @@ class AlertStore:
         return {row[0] for row in rows}
 
     def cancel(self, alert_id: str, chat_id: int) -> bool:
-        """Delete only a MANUAL alert owned by this chat (bash parity).
-        Auto trade alerts are system-managed and not user-cancellable."""
+        """Delete ANY alert owned by this chat (manual or auto entry/tp/sl).
+
+        Auto trade alerts used to be system-managed here, which stranded
+        stale entry alerts (e.g. an unfilled pending order) forever: the
+        only other removal paths (/close, /cancel_order) require a
+        successful broker call first. Auto alerts are notification/guard
+        chains only -- the real SL/TP live broker-side -- so the owning
+        chat may remove them with /cancel.
+        """
         cur = self._db.execute(
-            "DELETE FROM alerts WHERE id = ? AND chat_id = ? AND kind = ?",
-            (alert_id.upper(), chat_id, KIND_MANUAL))
+            "DELETE FROM alerts WHERE id = ? AND chat_id = ?",
+            (alert_id.upper(), chat_id))
         self._db.commit()
         return cur.rowcount > 0
 

@@ -442,21 +442,32 @@ class AutoAlertStoreTests(unittest.TestCase):
     def tearDown(self):
         self.store.close()
 
-    def test_cancel_only_manual(self):
+    def test_cancel_owner_any_kind(self):
+        """The owning chat can /cancel manual AND auto trade alerts.
+
+        Stale auto entry alerts (unfilled pending orders) previously could
+        not be removed by anyone -- /cancel filtered kind='manual' and
+        /close or /cancel_order need a working broker round-trip first."""
         self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP, "m")
         auto = self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP,
                                  "e", kind=alerts.KIND_ENTRY, trade_id="9")
-        # auto alerts are not user-cancellable via /cancel
-        self.assertFalse(self.store.cancel(auto.id, 1))
+        tp = self.store.create(1, "XAUUSD", 2480.0, alerts.CROSSING_UP,
+                               "tp", kind=alerts.KIND_TP, trade_id="9")
+        # ownership is still enforced for every kind
+        self.assertFalse(self.store.cancel(auto.id, 999))
+        self.assertFalse(self.store.cancel(auto.id.lower(), 999))
+        self.assertEqual(len(self.store.for_chat(1)), 3)
+        # the owner can now cancel auto alerts directly
+        self.assertTrue(self.store.cancel(auto.id, 1))
         self.assertEqual(len(self.store.for_chat(1)), 2)
-        # manual alerts are still cancellable
+        self.assertTrue(self.store.cancel(tp.id, 1))
+        # manual alerts keep working as before
         m = self.store.for_chat(1)[0]
         self.assertEqual(m.kind, alerts.KIND_MANUAL)
         self.assertTrue(self.store.cancel(m.id, 1))
-        self.assertEqual(len(self.store.for_chat(1)), 1)
-        # cancel_auto removes the remaining auto alert
-        self.assertTrue(self.store.cancel_auto("9"))
         self.assertEqual(self.store.for_chat(1), [])
+        # already-deleted ids report not found
+        self.assertFalse(self.store.cancel(auto.id, 1))
 
     def test_cancel_auto_by_trade_id(self):
         self.store.create(1, "XAUUSD", 2450.0, alerts.CROSSING_UP, "m")

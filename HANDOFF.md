@@ -31,7 +31,7 @@ Caddy). The deployed package is a *copied* install in the venv
 **Versioning convention:** every code ship bumps the static patch version in
 **both** `pyproject.toml` (`version =`) and `src/crackedalert/__init__.py`
 (`__version__`). Runtime version is `v2.<commit count>` (git-derived). Current
-release: **2.0.29** (committed, pushed — **NOT yet deployed**; VPS is on 2.0.25).
+release: **2.0.30** (committed — **NOT yet deployed**; VPS is on 2.0.25).
 
 ---
 
@@ -110,16 +110,19 @@ behavior that always works.
 
 ### 2.4 PENDING ACTIONS (in order — the person continuing should do these)
 
-1. **Fastest confirmation (no deploy):** in Telegram, cancel the stale
-   entry alerts and retry `/m`:
+1. **Fastest confirmation:** deploy first (the running 2.0.25 still refuses
+   `/cancel` on auto alerts — that's how the zombies got stranded), then
+   in Telegram:
    ```
    /cancel 9AG3
    /cancel 4KF1
    /m 4634.28 n 2 2 demo --smart-sl 4636.687
    ```
    If `/m` works → the concurrent-reconcile-spam mechanism is confirmed.
+   (Pre-deploy alternative: delete the rows directly —
+   `sqlite3 /etc/cracked_alert/cracked.db "DELETE FROM alerts WHERE id IN ('9AG3','4KF1');"`)
 2. **Deploy the fix:** `cd ~/crackedalert && sudo ./deploy_v2.sh` (installs
-   2.0.29 with request serialization). Retry `/m`.
+   2.0.30 with request serialization + auto-alert cancel). Retry `/m`.
 3. **Confirm the mechanism with the probe:** the probe now has a
    `CONCURRENT REQUESTS` section (sends trendbar+trader and reconcile+trader
    back-to-back without awaiting):
@@ -127,7 +130,7 @@ behavior that always works.
    cd ~/crackedalert && git pull && sudo /opt/crackedalert/venv/bin/python3 bin/probe_trader.py
    ```
    Watch for: `=> trader back-to-back: SILENT` → mechanism confirmed.
-4. If `/m` STILL fails after 2.0.29: the difference is process-level, not
+4. If `/m` STILL fails after 2.0.30: the difference is process-level, not
    protocol-level. Next steps: instrument `request()`/recv-loop logging in
    the bot, or replicate the bot's exact `/m` call path (incl. `ensure_quote`)
    from inside the running process.
@@ -161,6 +164,7 @@ single/dual/aged/concurrent configuration the bot doesn't replicate.
 | 2.0.22–26 | Probe tool iterations (`bin/probe_trader.py`) |
 | 2.0.27–28 | Probe: symbol lookups, age test, dual connections, `ca-N` ids |
 | 2.0.29 | **Request serialization** (per-client lock) — see 2.3. **NOT yet deployed** |
+| 2.0.30 | `/cancel` now deletes ANY alert owned by the chat, incl. auto entry/tp/sl — stale zombie entry alerts (`9AG3`/`4KF1`) are finally user-cancellable |
 
 Android app: `android/` committed with debug APK; built locally with
 JDK 21 (`C:\Android\jdk-21`) + Android SDK (`C:\Android\sdk`) + cached
