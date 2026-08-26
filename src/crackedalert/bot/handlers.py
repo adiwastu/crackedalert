@@ -53,7 +53,8 @@ class TradeArgs:
     risk_usd: Optional[float] = None   # dollar amount, $ prefix; else pct
     cc_timeframe: Optional[str] = None   # e.g. "M15"; None = no guard
     cc_price: Optional[float] = None
-    smart_sl: Optional[float] = None      # exact smart-stop price; None = stop at original SL
+    smart_sl: Optional[float] = None      # soft candle-close stop level
+    smart_sl_tf: Optional[str] = None     # its timeframe (required with smart_sl)
     broadcast: bool = False
 
 
@@ -91,12 +92,15 @@ def parse_alert(text: str, default_symbol: str,
 
 
 def parse_trade(text: str, is_market: bool) -> TradeArgs:
-    """/m <sl> <widen> <rr> <risk%> <account> [--smart-sl <price>] [<tf> <guard_price>] [--all]
-       /p <entry> <sl> <widen> <rr> <risk%> <account> [--smart-sl <price>] [<tf> <guard_price>] [--all]
-    --smart-sl <price> places the stop exactly at <price> (must sit between
-    the fill and the original SL). Lots always anchor to the original SL, so
-    the risk at the smart stop is the stated risk% scaled by the distance
-    ratio. It may appear before the optional CC guard pair / --all.
+    """/m <sl> <widen> <rr> <risk%> <account> [--smart-sl <price> <tf>] [<tf> <guard_price>] [--all]
+       /p <entry> <sl> <widen> <rr> <risk%> <account> [--smart-sl <price> <tf>] [<tf> <guard_price>] [--all]
+    --smart-sl <price> <tf> arms a SOFT candle-close stop: when a <tf>
+    candle CLOSES past <price> (below for longs, above for shorts), the
+    position is closed at market. The broker-side SL stays at the original
+    level and lots always anchor to it, so the risk at the smart level is
+    the stated risk% scaled by the distance ratio. <price> must sit
+    between the fill and the original SL (validated pre-placement).
+    Cannot be combined with a CC guard pair.
     """
     tokens = text.split()[1:]
     broadcast = _pop_broadcast(tokens)
@@ -142,17 +146,28 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
     if risk_usd is not None and risk_usd <= 0:
         raise ParseError("risk amount must be positive")
 
-    # Optional exact smart-SL price: --smart-sl <price> (or -ss <price>).
+    # Optional soft candle-close stop: --smart-sl <price> <tf>.
     rest = tokens[base:]
     smart_sl = None
+    smart_sl_tf = None
     if rest and rest[0].lower() in ("--smart-sl", "-ss", "--smartsl"):
-        if len(rest) < 2:
-            raise ParseError("expected a price after --smart-sl")
+        if len(rest) < 3:
+            raise ParseError(
+                "expected a price AND a timeframe after --smart-sl "
+                "(e.g. --smart-sl 4613.23 M5)")
         try:
             smart_sl = float(rest[1])
         except ValueError:
             raise ParseError("smart SL price is not a number")
-        rest = rest[2:]
+        smart_sl_tf = rest[2].upper()
+        if smart_sl_tf not in candles_mod.TIMEFRAMES:
+            raise ParseError(
+                "smart SL timeframe '%s' is not valid. Use: %s"
+                % (smart_sl_tf, " ".join(candles_mod.TIMEFRAMES)))
+        rest = rest[3:]
+        if rest:
+            raise ParseError(
+                "--smart-sl cannot be combined with a CC guard pair")
 
     # CC guard (optional)
     cc_timeframe = None
@@ -173,6 +188,7 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
     return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
                      rr=rr, risk_pct=risk_pct, account=account,
                      risk_usd=risk_usd, smart_sl=smart_sl,
+                     smart_sl_tf=smart_sl_tf,
                      cc_timeframe=cc_timeframe, cc_price=cc_price,
                      broadcast=broadcast)
 
@@ -661,42 +677,53 @@ class Handlers:
             smart_sl=plan.smart_sl, smart_risk_usd=plan.smart_risk_usd,
             smart_risk_pct=plan.smart_risk_pct))
 
-        if args.cc_timeframe and args.cc_price is not None:
-            if self._candle_store is not None and self._candle_feed is not None:
-                if not is_market and self._pending_cc is None:
-                    await self._reply(update,
-                        "warning: cc guard requested but the fill hook "
-                        "is unavailable -- use /ccalert after the fill.")
-                else:
-                    await self._attach_cc_guard(update, plan, args, result,
-                                                is_market)
-            else:
+        wants_smart = args.smart_sl is not None
+        wants_cc = args.cc_timeframe is not None and args.cc_price is not None
+        if wants_smart or wants_cc:
+            if self._candle_store is None or self._candle_feed is None:
                 await self._reply(update,
-                    "warning: cc guard requested but candle feed is not available.")
+                    "warning: smart stop / cc guard requested but the "
+                    "candle feed is not available.")
+                return
+            if not is_market and self._pending_cc is None:
+                await self._reply(update,
+                    "warning: guard requested but the fill hook is "
+                    "unavailable -- use /ccalert after the fill.")
+                return
+            await self._attach_cc_guard(update, plan, args, result, is_market)
 
     async def _attach_cc_guard(self, update: Update, plan,
                                args: TradeArgs, result,
                                is_market: bool) -> None:
-        """Attach a CC guard to a trade.
+        """Attach a close-guard to a trade.
 
+        Source of (tf, price): --smart-sl <price> <tf> arms a SOFT
+        candle-close stop (broker SL stays at the original anchor);
+        otherwise the positional <tf> <guard_price> CC-guard pair is used.
         Market orders carry their position in the placement response, so
-        the guard is created immediately. Pending orders register their
-        guard params in the shared pending_cc registry; main.on_execution
+        the guard is created immediately. Pending orders register the
+        params in the shared pending_cc registry; main.on_execution
         materializes the guard when the fill's ExecutionEvent arrives.
         """
+        if args.smart_sl is not None:
+            tf = args.smart_sl_tf
+            guard_price = args.smart_sl
+        else:
+            tf = args.cc_timeframe
+            guard_price = args.cc_price
+
         if not is_market:
             self._pending_cc[str(result.order_id)] = {
                 "chat_id": update.effective_chat.id,
                 "symbol": self._symbol,
-                "timeframe": args.cc_timeframe,
-                "cc_price": args.cc_price,
+                "timeframe": tf,
+                "cc_price": guard_price,
                 "direction": plan.direction,
                 "account": args.account,
                 "broadcast": args.broadcast,
             }
             await self._reply(update,
-                              fmt.cc_guard_pending(args.cc_timeframe,
-                                                   args.cc_price))
+                              fmt.cc_guard_pending(tf, guard_price))
             return
 
         # Market fast path: the fill's positionId is already known.
@@ -704,7 +731,7 @@ class Handlers:
             log.warning("cc guard: no positionId on market fill for %s",
                         args.account)
             await self._reply(update,
-                "trade placed, but cc guard could not be set "
+                "trade placed, but the guard could not be set "
                 "(no positionId on the fill \u2014 use /ccalert manually).")
             return
         position = dict(result.position)
@@ -713,12 +740,7 @@ class Handlers:
         position_id = int(position.get("positionId", 0))
         if position_id == 0:
             await self._reply(update,
-                "trade placed, but cc guard could not be set (no positionId).")
-            return
-        position_id = int(position.get("positionId", 0))
-        if position_id == 0:
-            await self._reply(update,
-                "trade placed, but cc guard could not be set (no positionId).")
+                "trade placed, but the guard could not be set (no positionId).")
             return
 
         # BUY: guard fires if candle closes BELOW threshold
@@ -728,13 +750,13 @@ class Handlers:
                         else alerts_mod.CANDLE_ABOVE)
 
         alert = self._candle_store.create(
-            update.effective_chat.id, self._symbol, args.cc_timeframe,
-            args.cc_price, cc_direction,
+            update.effective_chat.id, self._symbol, tf,
+            guard_price, cc_direction,
             "cc guard for position %d" % position_id,
             action="close", position_id=position_id, account=args.account)
 
-        self._candle_feed.add_symbol(self._symbol, args.cc_timeframe)
+        self._candle_feed.add_symbol(self._symbol, tf)
         log.info("cc guard %s: pos=%d %s %s close-%s %.5f",
-                 alert.id, position_id, self._symbol, args.cc_timeframe,
-                 cc_direction, args.cc_price)
+                 alert.id, position_id, self._symbol, tf,
+                 cc_direction, guard_price)
         await self._reply(update, fmt.cc_guard_set(alert))

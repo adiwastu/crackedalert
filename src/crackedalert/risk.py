@@ -74,17 +74,16 @@ def _build(direction: str, order_kind: str, entry_ref: float,
         risk_usd = balance * (risk_pct / 100.0)
 
     # Lots are ALWAYS sized off the original SL distance, so the stated
-    # "risk%" is the loss if price reaches the original SL. An exact smart
-    # SL price only moves where the stop sits: it must be between the fill
-    # (basis) and the original SL, and the exposure there is scaled by
-    # smart_dist/dist. The exposure is reported in dollars and as a % of
-    # balance; for a valid smart stop dist is > 0 by construction, but the
-    # pure function still guards the division.
+    # "risk%" is the loss if price reaches the original SL. Since v2.0.32
+    # the exact smart-SL level does NOT move the broker-side stop: it is
+    # guarded by a candle-close close-guard instead (original SL stays at
+    # the broker). The exposure AT the smart level is still computed for
+    # information, scaled by smart_dist/dist; the division is guarded even
+    # though dist > 0 by construction for a valid smart stop.
     if smart_sl is not None and dist > 0:
         smart_dist = abs(basis - smart_sl)
         smart_risk_usd = risk_usd * (smart_dist / dist)
         smart_risk_pct = (smart_risk_usd / balance * 100.0) if balance > 0 else None
-        sl = smart_sl  # place the stop exactly at the requested price
     else:
         smart_risk_usd = None
         smart_risk_pct = None
@@ -114,10 +113,12 @@ def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,
     risk_usd overrides the percentage-based risk (dollar mode): when set,
     risk_pct is ignored and the exact dollar amount is used.
 
-    smart_sl (exact smart-stop price) places the stop exactly there; it
-    must sit between the fill and the original SL. Lots stay anchored to
-    the original SL distance, so the risk at the smart stop is
-    risk_pct * smart_dist/dist; see TradePlan docs.
+    smart_sl (exact soft-stop level): does NOT move the broker-side stop.
+    It must sit between the fill and the original SL; the caller attaches
+    a candle-close guard that closes the position when a candle CLOSES
+    past the level. Lots stay anchored to the original SL distance, so
+    the risk at the smart level is risk_pct * smart_dist/dist; see
+    TradePlan docs.
     """
     mid = (bid + ask) / 2.0
     direction = BUY if sl < mid else SELL
@@ -143,10 +144,11 @@ def plan_pending(bid: float, ask: float, entry: float, sl: float, widen: bool,
     risk_usd overrides the percentage-based risk (dollar mode): when set,
     risk_pct is ignored and the exact dollar amount is used.
 
-    smart_sl (exact smart-stop price) places the stop exactly there; it
-    must sit between the fill and the original SL. Lots stay anchored to
-    the original SL distance, so the risk at the smart stop is
-    risk_pct * smart_dist/dist; see TradePlan docs.
+    smart_sl (exact soft-stop level): does NOT move the broker-side stop.
+    It must sit between the placement fill and the original SL; the caller
+    attaches a candle-close guard that closes the position when a candle
+    CLOSES past the level. Lots stay anchored to the original SL distance;
+    see TradePlan docs.
     """
     direction = BUY if sl < entry else SELL
     spread = ask - bid

@@ -31,7 +31,7 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 
 **Syntax:**
 ```
-/m <sl> <widen:y|n> <rr> <risk%|$amount> <account> [<tf> <guard_price>]
+/m <sl> <widen:y|n> <rr> <risk%|$amount> <account> [--smart-sl <price> <tf>] [<tf> <guard_price>]
 ```
 
 **Parameters:**
@@ -68,6 +68,7 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 - Lots are **floored** to the broker's volume step so the stated risk % is never exceeded.
 - Rejects orders below the broker's minimum lot size.
 - Places the order with SL/TP and label `crackedalert`.
+- **`--smart-sl <price> <tf>`** (soft candle-close stop): does NOT move the broker-side SL. Arms a guard that closes the position when a `<tf>` candle CLOSES past `<price>` (BUY: below, SELL: above). `<price>` must sit between the fill and the original SL. Lots stay anchored to the original SL; the reply reports the estimated exposure at the smart level.
 - SL/TP are real broker-side orders -- results (fills, TP/SL hits) are visible in the cTrader app.
 - If a CC guard (`tf` + `guard_price`) is given, creates a candle-close guard that auto-closes the position when a candle closes past the guard price.
 
@@ -110,6 +111,7 @@ Places a **pending** order (limit or stop) at an explicit entry price. The place
 - **Risk as percent:** `/p 2450.00 2455.00 n 3 1 5k`
 - **Risk as dollar amount:** `/p 2450.00 2455.00 n 3 $100 5k`
 - **With CC guard:** `/p 2450.00 2455.00 n 3 1 5k H1 2445`
+- **With soft candle-close stop:** `/p 2450.00 2455.00 n 3 1 5k --smart-sl 2451.25 M15`
 - **Without widen:** `/p 2450.00 2455.00 n 3 1 5k`
 
 **Examples:**
@@ -126,8 +128,7 @@ Places a **pending** order (limit or stop) at an explicit entry price. The place
 - Infers LIMIT or STOP order type.
 - SL/TP/dist/lots are computed off the **placement price** (the actual fill), not the raw entry.
 - Places the order with `GOOD_TILL_CANCEL` time-in-force.
-- On success with a CC guard requested, replies with a "CC guard queued" message -- the guard activates automatically when the order fills.
-- If a CC guard was requested, replies with a "CC guard queued" message — the guard activates when the order fills.
+- On success with a CC guard or `--smart-sl` requested, replies with a "CC guard queued" message — the guard activates automatically when the order fills.
 
 **Error cases:** Same as `/m`.
 

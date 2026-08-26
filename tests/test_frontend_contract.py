@@ -58,8 +58,15 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn('id="smart-sl"', self.ui)
 
     def test_smart_sl_flag_emitted_on_trade(self) -> None:
-        self.assertIn("base.push('--smart-sl',ss)", self.ui)
+        self.assertIn("base.push('--smart-sl',ss,$('smart-tf').value)",
+                      self.ui)
         self.assertIn("const ss=$('smart-sl').value", self.ui)
+
+    def test_smart_sl_timeframe_select_present(self) -> None:
+        # v2.0.32: the soft candle-close stop needs a designated timeframe;
+        # M5 is the default selection.
+        self.assertIn('id="smart-tf"', self.ui)
+        self.assertIn("<option selected>M5</option>", self.ui)
 
     def test_smart_sl_risk_readout_present(self) -> None:
         # The UI shows the risk at the smart stop (pending orders) or says

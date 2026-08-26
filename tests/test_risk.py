@@ -119,15 +119,16 @@ class LotEdgeCases(unittest.TestCase):
 
 
 class SmartSL(unittest.TestCase):
-    """Exact smart-SL price: stop placed at the price, lots anchored to the
-    original SL, risk at the smart stop = risk_pct * smart_dist/dist."""
+    """Soft candle-close stop level (v2.0.32): the broker-side stop stays
+    at the ORIGINAL SL; lots anchored to it; risk at the smart level =
+    risk_pct * smart_dist/dist (informational)."""
 
     def test_pending_buy_smart_stop_exact_and_risk_scaled(self):
         # fill 2400.2, sl 2395 (dist 5.2), smart 2398.5 -> smart_dist 1.7
         p = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2395.0,
                               widen=False, rr=3, risk_pct=1, balance=10000,
                               smart_sl=2398.5)
-        self.assertAlmostEqual(p.sl, 2398.5)          # stop exactly at price
+        self.assertAlmostEqual(p.sl, 2395.0)          # original SL untouched
         self.assertAlmostEqual(p.dist, 5.2)           # original SL distance
         # lots anchored to the ORIGINAL SL distance (== no-mult x1 sizing)
         p_plain = risk.plan_pending(2449.8, 2450.0, entry=2400.0, sl=2395.0,
@@ -146,7 +147,7 @@ class SmartSL(unittest.TestCase):
         p = risk.plan_pending(2449.8, 2450.0, entry=2500.0, sl=2510.0,
                               widen=False, rr=1, risk_pct=2, balance=10000,
                               smart_sl=2505.0)
-        self.assertAlmostEqual(p.sl, 2505.0)
+        self.assertAlmostEqual(p.sl, 2510.0)          # original SL untouched
         smart_dist = abs(2499.8 - 2505.0)
         orig_dist = abs(2499.8 - 2510.0)
         self.assertAlmostEqual(p.smart_risk_pct, 2 * (smart_dist / orig_dist))
@@ -158,7 +159,7 @@ class SmartSL(unittest.TestCase):
                              smart_sl=2445.0)
         self.assertEqual(p.direction, risk.BUY)
         self.assertAlmostEqual(p.entry_ref, 2450.0)
-        self.assertAlmostEqual(p.sl, 2445.0)          # exact smart stop
+        self.assertAlmostEqual(p.sl, 2440.0)          # original SL untouched
         self.assertAlmostEqual(p.dist, 10.0)
         self.assertAlmostEqual(p.smart_risk_pct, 0.5 * (2450.0 - 2445.0) / 10.0)
 
@@ -184,7 +185,7 @@ class SmartSL(unittest.TestCase):
         p = risk.plan_market(bid=2449.8, ask=2450.0, sl=2440.0, widen=False,
                              rr=2, risk_pct=0, balance=10000,
                              risk_usd=50.0, smart_sl=2445.0)
-        self.assertAlmostEqual(p.sl, 2445.0)
+        self.assertAlmostEqual(p.sl, 2440.0)             # NOT relocated
         self.assertAlmostEqual(p.smart_risk_usd, 25.0)   # 50 * (5/10)
         # % of balance: 25 / 10000 * 100
         self.assertAlmostEqual(p.smart_risk_pct, 0.25)

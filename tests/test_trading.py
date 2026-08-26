@@ -291,13 +291,15 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["stopLoss"], 2395.0)
         self.assertEqual(sent["takeProfit"], 2415.8)   # 2400.2 + 5.2*3
 
-    def test_market_smart_sl_places_exact_stop(self):
-        # bid 2449.8 / ask 2450.0, SL 2440 -> fill 2450 (ask), smart 2445
+    def test_market_smart_sl_keeps_original_broker_stop(self):
+        # bid 2449.8 / ask 2450.0, SL 2440 -> fill 2450 (ask), smart 2445:
+        # v2.0.32 soft stop -- broker SL stays at the original anchor.
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
                          risk_pct=0.5, account="demo", smart_sl=2445.0)
         plan, symbol, result, lots = run(self.service.execute(args, True))
         sent = self.cli.orders[0]
-        self.assertEqual(sent["stopLoss"], 2445.0)
+        self.assertEqual(sent["stopLoss"], 2440.0)
+        self.assertEqual(plan.sl, 2440.0)              # plan not relocated
         self.assertEqual(sent["takeProfit"], 2470.0)   # 2450 + 10*2
         self.assertIsNotNone(plan.smart_risk_pct)
 
@@ -318,14 +320,19 @@ class TradingServiceTests(unittest.TestCase):
             run(self.service.execute(args, True))
         self.assertIn("smart SL", str(cm.exception))
 
-    def test_pending_smart_sl_places_exact_stop(self):
-        # entry 2400, sl 2395, fill 2400.2, smart 2398.5
+    def test_pending_smart_sl_keeps_original_broker_stop(self):
+        # v2.0.32: --smart-sl is a SOFT candle-close stop. The broker-side
+        # stopLoss must stay at the ORIGINAL anchor, never the smart level;
+        # the smart exposure is reported informationally.
         args = TradeArgs(entry=2400.0, sl=2395.0, widen=False, rr=3,
                          risk_pct=1, account="demo", smart_sl=2398.5)
         plan, symbol, result, lots = run(self.service.execute(args, False))
         sent = self.cli.orders[0]
-        self.assertEqual(sent["stopLoss"], 2398.5)
-        self.assertEqual(sent["takeProfit"], 2415.8)   # 2400.2 + 5.2*3
+        self.assertEqual(sent["stopLoss"], 2395.0)      # original, untouched
+        self.assertEqual(plan.sl, 2395.0)               # plan not relocated
+        self.assertEqual(sent["takeProfit"], 2415.8)    # 2400.2 + 5.2*3
+        # exposure at the smart level: dist 5.2 -> smart dist 1.7 => ~1/3
+        self.assertAlmostEqual(plan.smart_risk_pct, 1 * (1.7 / 5.2), places=6)
 
     def test_pending_smart_sl_between_entry_and_placement_valid(self):
         # Regressions for the placement-fill fix: the fill for a pending BUY
@@ -336,19 +343,19 @@ class TradingServiceTests(unittest.TestCase):
                          risk_pct=1, account="demo", smart_sl=2400.1)
         plan, symbol, result, lots = run(self.service.execute(args, False))
         sent = self.cli.orders[0]
-        self.assertEqual(sent["stopLoss"], 2400.1)
+        self.assertEqual(sent["stopLoss"], 2395.0)
 
     def test_market_smart_sl_dollar_mode_reports_dollars(self):
-        # $50 risk (dollar mode) + smart stop at half distance -> $25.
+        # $50 risk (dollar mode) + soft stop at half distance -> $25 info.
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
                          risk_pct=0.0, account="demo", risk_usd=50.0,
                          smart_sl=2445.0)
         plan, symbol, result, lots = run(self.service.execute(
             args, True, risk_usd=args.risk_usd))
-        self.assertEqual(plan.sl, 2445.0)
+        self.assertEqual(plan.sl, 2440.0)               # NOT relocated
         self.assertAlmostEqual(plan.smart_risk_usd, 25.0)
 
-    def test_market_smart_sl_dollar_mode_out_of_range_rejected(self):
+    def test_market_smart_sl_out_of_range_rejected(self):
         args = TradeArgs(entry=None, sl=2440.0, widen=False, rr=2,
                          risk_pct=0.0, account="demo", risk_usd=50.0,
                          smart_sl=2435.0)

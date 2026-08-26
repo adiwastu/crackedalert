@@ -117,6 +117,34 @@ class TradeParsing(unittest.TestCase):
         t = handlers.parse_trade("/m 2440 y 2 0.5 10k", is_market=True)
         self.assertFalse(t.broadcast)
 
+    def test_smart_sl_with_timeframe(self):
+        t = handlers.parse_trade(
+            "/m 2440 n 2 0.5 10k --smart-sl 2445.5 M5", is_market=True)
+        self.assertEqual(t.smart_sl, 2445.5)
+        self.assertEqual(t.smart_sl_tf, "M5")
+        self.assertIsNone(t.cc_timeframe)
+
+    def test_smart_sl_short_flag_and_lowercase_tf(self):
+        t = handlers.parse_trade(
+            "/p 2450 2455 n 3 1 5k -ss 2451.25 m15", is_market=False)
+        self.assertEqual((t.smart_sl, t.smart_sl_tf), (2451.25, "M15"))
+
+    def test_smart_sl_requires_timeframe(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 n 2 0.5 10k --smart-sl 2445.5",
+                                 is_market=True)
+
+    def test_smart_sl_invalid_timeframe(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m 2440 n 2 0.5 10k --smart-sl 2445.5 W2", is_market=True)
+
+    def test_smart_sl_rejects_cc_pair_combination(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m 2440 n 2 0.5 10k --smart-sl 2445.5 M5 H1 4080",
+                is_market=True)
+
     def test_wrong_arity(self):
         with self.assertRaises(handlers.ParseError):
             handlers.parse_trade("/m 2440.00 y 2 0.5", is_market=True)
@@ -162,28 +190,37 @@ class TradeParsing(unittest.TestCase):
             handlers.parse_trade("/m 2440.00 y 2 $abc demo", is_market=True)
 
     def test_market_smart_sl(self):
-        t = handlers.parse_trade("/m 2440 y 2 0.5 10k --smart-sl 2435",
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k --smart-sl 2435 M5",
                                  is_market=True)
         self.assertAlmostEqual(t.smart_sl, 2435.0)
+        self.assertEqual(t.smart_sl_tf, "M5")
         self.assertIsNone(t.cc_timeframe)
 
     def test_pending_smart_sl(self):
-        t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k --smart-sl 2445",
+        t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k --smart-sl 2445 H1",
                                  is_market=False)
         self.assertAlmostEqual(t.smart_sl, 2445.0)
+        self.assertEqual(t.smart_sl_tf, "H1")
 
     def test_smart_sl_short_alias(self):
-        t = handlers.parse_trade("/m 2440 y 2 0.5 10k -ss 2435",
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k -ss 2435 D1",
                                  is_market=True)
         self.assertAlmostEqual(t.smart_sl, 2435.0)
+        self.assertEqual(t.smart_sl_tf, "D1")
 
-    def test_smart_sl_with_cc_guard_and_all(self):
+    def test_smart_sl_with_cc_guard_rejected(self):
+        # one soft-stop guard per trade: the positional CC pair conflicts
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m 2440 y 2 0.5 10k --smart-sl 2435 M15 4080",
+                is_market=True)
+
+    def test_smart_sl_with_broadcast_flag_ok(self):
         t = handlers.parse_trade(
-            "/m 2440 y 2 0.5 10k --smart-sl 2435 M15 4080 --all",
+            "/m 2440 y 2 0.5 10k --smart-sl 2435 M15 --all",
             is_market=True)
         self.assertAlmostEqual(t.smart_sl, 2435.0)
-        self.assertEqual(t.cc_timeframe, "M15")
-        self.assertEqual(t.cc_price, 4080.0)
+        self.assertEqual(t.smart_sl_tf, "M15")
         self.assertTrue(t.broadcast)
 
     def test_smart_sl_missing_price_raises(self):
