@@ -54,6 +54,12 @@ class TradingViewImportContractTest(unittest.TestCase):
         self.assertIn('id="tv-paste"', self.tv)
         self.assertIn('id="tv-symbol"', self.tv)
 
+    def test_pending_only(self) -> None:
+        # The drawing page is strictly for pending orders: no /m toggle.
+        self.assertNotIn("seg-market", self.tv)
+        self.assertNotIn("'/m'", self.tv)
+        self.assertIn("'/p'", self.tv)
+
     def test_prefills_present(self) -> None:
         # RR derived from the drawing, risk% from the clip, alert builder
         # fed from the drawing (Use SL / Use TP).

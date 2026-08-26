@@ -38,7 +38,7 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 .fmt-val{font-family:monospace;font-size:10px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;color:#333}
 </style>
 
-<h1>Cracked Alert <b>v2.0.40</b> — TradingView import</h1>
+<h1>Cracked Alert <b>v2.0.41</b> — TradingView import</h1>
 
 <section>
   <div id="tv-paste" tabindex="0" onclick="this.focus()">
@@ -76,12 +76,7 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 </section>
 
 <section id="builder">
-  <div style="margin-bottom:4px"><label>Order type</label>
-    <div class="seg">
-      <button id="seg-pending" class="active" onclick="segCmd('pending')">Pending /p</button>
-      <button id="seg-market" onclick="segCmd('market')">Market /m</button>
-    </div>
-  </div>
+  <div class="hint" style="margin-bottom:8px">Pending order only — the drawing is your plan; the /p order sits at the broker until filled.</div>
   <div class="row">
     <div><label>Widen</label><select id="tv-widen" onchange="refresh()"><option value="n">No</option><option value="y">Yes</option></select></div>
     <div><label>RR</label><select id="tv-rr" onchange="refresh()"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
@@ -203,12 +198,6 @@ function refreshAlert(){
 }
 let ALERT_KIND='price';
 
-function segCmd(kind){
-  S.orderType=kind;
-  $('seg-pending').classList.toggle('active',kind==='pending');
-  $('seg-market').classList.toggle('active',kind==='market');
-  refresh();
-}
 function setDir(d){
   S.dir=d;
   $('dir-long').classList.toggle('active',d==='long');
@@ -431,9 +420,8 @@ function refresh(){
   const widen=$('tv-widen').value,rr=$('tv-rr').value,
         risk=$('tv-risk').value,acct=$('tv-acct').value;
   if(!sl){$('tv-trade-cmd').textContent='';$('tv-copy').disabled=true;return;}
-  const base=S.orderType==='market'
-    ?['/m',sl,widen,rr,risk,acct]
-    :(entry?['/p',entry,sl,widen,rr,risk,acct]:null);
+  // Pending-only page: the drawing always produces a /p order.
+  const base=entry?['/p',entry,sl,widen,rr,risk,acct]:null;
   if(!base){$('tv-trade-cmd').textContent='';$('tv-copy').disabled=true;return;}
   const ss=$('tv-ss').value;
   if($('tv-ss-on').checked&&ss)base.push('--smart-sl',ss,$('smart-tf').value);
