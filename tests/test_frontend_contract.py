@@ -54,6 +54,17 @@ class TradingViewImportContractTest(unittest.TestCase):
         self.assertIn('id="tv-paste"', self.tv)
         self.assertIn('id="tv-symbol"', self.tv)
 
+    def test_prefills_present(self) -> None:
+        # RR derived from the drawing, risk% from the clip, alert builder
+        # fed from the drawing (Use SL / Use TP).
+        self.assertIn("setSelect('tv-rr'", self.tv)
+        self.assertIn("sources.0.source.state.risk", self.tv)
+        self.assertIn("prefillAlert", self.tv)
+        self.assertIn('id="tv-alert-cmd"', self.tv)
+        self.assertIn('id="tv-alert-price"', self.tv)
+        self.assertIn("Bot TP at RR", self.tv)
+        self.assertIn('id="note-presets"', self.tv)
+
 
 class FrontendContractTest(unittest.TestCase):
 
