@@ -31,18 +31,24 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 #trade-card{display:none}
 #builder{display:none}
 .hint{font-size:12px;color:#666;margin-top:4px}
+#tv-status{font-size:13px;color:#00703c;margin-top:10px;min-height:18px}
+#tv-formats{margin-top:8px}
+.fmt-card{border:1px solid #ddd;border-radius:6px;margin-bottom:8px;overflow:hidden}
+.fmt-type{font-family:monospace;font-size:11px;background:#f4f4f4;border-bottom:1px solid #ddd;padding:4px 8px;color:#666}
+.fmt-val{font-family:monospace;font-size:10px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;color:#333}
 </style>
 
-<h1>Cracked Alert <b>v2.0.36</b> — TradingView import</h1>
+<h1>Cracked Alert <b>v2.0.37</b> — TradingView import</h1>
 
 <section>
   <div id="tv-paste" tabindex="0" onclick="this.focus()">
     Copy a <b>Risk/Reward</b> drawing in TradingView, then<br>
     click here and press <b>Ctrl+V</b> (or paste anywhere on this page)
   </div>
-  <div class="hint" style="margin-top:8px">No clipboard data? Paste a plain <b>text/html</b> clipboard dump below to inspect it.</div>
   <input type="file" id="tv-file" accept="text/html" style="display:none" onchange="filePicked(this)">
   <button onclick="document.getElementById('tv-file').click()" style="margin-top:8px;background:#444">Load clipboard file…</button>
+  <p id="tv-status"></p>
+  <div id="tv-formats"></div>
   <div class="err" id="tv-err"></div>
 </section>
 
@@ -146,11 +152,37 @@ function isEditable(el){
     el.tagName==='SELECT'||el.isContentEditable);
 }
 
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// Reference-inspector behavior: every paste renders a visible report of
+// the clipboard formats, so it is always obvious what arrived.
+function showFormats(types,getData){
+  $('tv-status').textContent='Found '+types.length+' format(s).';
+  const box=$('tv-formats');
+  box.innerHTML='';
+  for(const t of types){
+    const card=document.createElement('div');
+    card.className='fmt-card';
+    if(t==='Files'){
+      card.innerHTML='<div class="fmt-type">Files</div><div class="fmt-val">(files)</div>';
+    }else{
+      let raw='';
+      try{raw=getData(t)||'';}catch(_){raw='(unreadable)';}
+      const preview=raw.length>2000?raw.slice(0,2000)+'\n...[truncated]':raw;
+      card.innerHTML='<div class="fmt-type">'+esc(t)+'</div>'+
+        '<div class="fmt-val">'+esc(preview)+'</div>';
+    }
+    box.appendChild(card);
+  }
+}
+
 function handlePaste(e){
+  if(!isEditable(e.target))e.preventDefault();
   const cd=e.clipboardData;
-  if(!cd)return;
+  if(!cd){$('tv-status').textContent='No clipboard data.';return;}
   const types=Array.from(cd.types||[]);
-  if(!types.length)return;
+  if(!types.length){$('tv-status').textContent='Clipboard is empty.';return;}
+  showFormats(types,(t)=>cd.getData(t));
 
   // scan every format for a TradingView clip
   for(const t of types){
@@ -160,7 +192,6 @@ function handlePaste(e){
     if(!raw)continue;
     const clip=parseTradingViewClip(raw);
     if(clip){
-      e.preventDefault();
       CLIP=clip;
       $('tv-raw').textContent=JSON.stringify(clip,null,2)+
         '\n\n(from clipboard type: '+t+')';
@@ -169,23 +200,7 @@ function handlePaste(e){
       return;
     }
   }
-
-  // nothing usable: only swallow the paste (and show a dump) when the
-  // target is not a form field, so normal pastes into inputs still work
-  if(!isEditable(e.target)){
-    e.preventDefault();
-    $('tv-err').textContent='No TradingView clipboard data found. '+
-      'Clipboard formats seen: '+types.join(', ');
-    const lines=[];
-    for(const t of types){
-      let raw='';
-      try{raw=t==='Files'?'(files)':cd.getData(t)||'';}catch(_){raw='(unreadable)';}
-      lines.push('--- '+t+' ---\n'+(raw.length>6000?raw.slice(0,6000)+'\n...[truncated]':raw));
-    }
-    $('tv-raw').textContent=lines.join('\n\n');
-    $('trade-card').style.display='';
-    $('builder').style.display='';
-  }
+  $('tv-err').textContent='No TradingView clip found in the pasted data (see formats below).';
 }
 function filePicked(input){
   if(!input.files.length)return;
