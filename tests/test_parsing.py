@@ -203,10 +203,19 @@ class TradeParsing(unittest.TestCase):
         self.assertEqual(t.smart_sl_tf, "H1")
 
     def test_smart_sl_short_alias(self):
-        t = handlers.parse_trade("/m 2440 y 2 0.5 10k -ss 2435 D1",
+        t = handlers.parse_trade("/m 2440 y 2 0.5 10k -ss 2435 h1",
                                  is_market=True)
         self.assertAlmostEqual(t.smart_sl, 2435.0)
-        self.assertEqual(t.smart_sl_tf, "D1")
+        self.assertEqual(t.smart_sl_tf, "H1")
+
+    def test_smart_sl_restricted_timeframes(self):
+        # v2.0.33: smart SL only accepts M1/M5/M15/M30/H1; higher TFs are
+        # rejected even though they remain valid for alerts and CC guards.
+        for tf in ("H4", "D1", "W1", "MN1"):
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_trade(
+                    "/m 2440 y 2 0.5 10k --smart-sl 2435 %s" % tf,
+                    is_market=True)
 
     def test_smart_sl_with_cc_guard_rejected(self):
         # one soft-stop guard per trade: the positional CC pair conflicts

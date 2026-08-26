@@ -68,7 +68,7 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 - Lots are **floored** to the broker's volume step so the stated risk % is never exceeded.
 - Rejects orders below the broker's minimum lot size.
 - Places the order with SL/TP and label `crackedalert`.
-- **`--smart-sl <price> <tf>`** (soft candle-close stop): does NOT move the broker-side SL. Arms a guard that closes the position when a `<tf>` candle CLOSES past `<price>` (BUY: below, SELL: above). `<price>` must sit between the fill and the original SL. Lots stay anchored to the original SL; the reply reports the estimated exposure at the smart level.
+- **`--smart-sl <price> <tf>`** (soft candle-close stop): does NOT move the broker-side SL. Arms a guard that closes the position when a `<tf>` candle CLOSES past `<price>` (BUY: below, SELL: above). `<tf>` must be one of `M1 M5 M15 M30 H1`. `<price>` must sit between the fill and the original SL. Lots stay anchored to the original SL; the reply reports the estimated exposure at the smart level.
 - SL/TP are real broker-side orders -- results (fills, TP/SL hits) are visible in the cTrader app.
 - If a CC guard (`tf` + `guard_price`) is given, creates a candle-close guard that auto-closes the position when a candle closes past the guard price.
 

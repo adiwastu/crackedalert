@@ -160,10 +160,10 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
         except ValueError:
             raise ParseError("smart SL price is not a number")
         smart_sl_tf = rest[2].upper()
-        if smart_sl_tf not in candles_mod.TIMEFRAMES:
+        if smart_sl_tf not in candles_mod.SMART_SL_TIMEFRAMES:
             raise ParseError(
                 "smart SL timeframe '%s' is not valid. Use: %s"
-                % (smart_sl_tf, " ".join(candles_mod.TIMEFRAMES)))
+                % (smart_sl_tf, " ".join(candles_mod.SMART_SL_TIMEFRAMES)))
         rest = rest[3:]
         if rest:
             raise ParseError(

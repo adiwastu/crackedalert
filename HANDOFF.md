@@ -31,7 +31,7 @@ Caddy). The deployed package is a *copied* install in the venv
 **Versioning convention:** every code ship bumps the static patch version in
 **both** `pyproject.toml` (`version =`) and `src/crackedalert/__init__.py`
 (`__version__`). Runtime version is `v2.<commit count>` (git-derived). Current
-release: **2.0.32** (committed — **NOT yet deployed**; VPS is on 2.0.31).
+release: **2.0.33** (committed — **NOT yet deployed**; VPS is on 2.0.31).
 
 ---
 
@@ -178,6 +178,7 @@ single/dual/aged/concurrent configuration the bot doesn't replicate.
 | 2.0.30 | `/cancel` now deletes ANY alert owned by the chat, incl. auto entry/tp/sl — stale zombie entry alerts (`9AG3`/`4KF1`) are finally user-cancellable |
 | 2.0.31 | **Auto-alert chain removed** (root cause of the demo deadlock); recv-loop decoupled via dispatch worker; CC guards kept (`pending_cc` registry for pending fills); legacy auto rows purged at startup |
 | 2.0.32 | **`--smart-sl` redefined as a soft candle-close stop**: `--smart-sl <price> <tf>` no longer moves the broker-side SL — it arms a guard that closes the position when a `<tf>` candle CLOSES past the level (validated between fill and original SL). ui.html gains a Candle-TF select for it; combining with the positional CC pair is rejected |
+| 2.0.33 | Smart-SL timeframes restricted to `M1 M5 M15 M30 H1` (new `SMART_SL_TIMEFRAMES` in candles.py; parser rejects higher TFs for `--smart-sl` only — CC guards and candle alerts keep the full list); ui.html Candle-TF select drops H4/D1 |
 
 Android app: `android/` committed with debug APK; built locally with
 JDK 21 (`C:\Android\jdk-21`) + Android SDK (`C:\Android\sdk`) + cached

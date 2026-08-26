@@ -24,6 +24,9 @@ HISTORY_COUNT = 3
 # Valid ProtoOATrendbarPeriod values (JSON mode uses these strings).
 TIMEFRAMES = ("M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1")
 
+# Timeframes offered for the soft candle-close stop (--smart-sl).
+SMART_SL_TIMEFRAMES = ("M1", "M5", "M15", "M30", "H1")
+
 
 class CandleFeed:
     """Polls closed candles for a set of (symbol, timeframe) keys.
