@@ -38,7 +38,7 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
 .fmt-val{font-family:monospace;font-size:10px;padding:6px 8px;white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;color:#333}
 </style>
 
-<h1>Cracked Alert <b>v2.0.41</b> — TradingView import</h1>
+<h1>Cracked Alert <b>v2.0.42</b> — TradingView import</h1>
 
 <section>
   <div id="tv-paste" tabindex="0" onclick="this.focus()">
@@ -102,40 +102,8 @@ details pre{font-size:10px;background:#f4f4f4;border:1px solid #ddd;border-radiu
   <div class="readout" id="tv-readout"></div>
 </section>
 
-<datalist id="note-presets">
-  <option value="ChoCh">
-  <option value="BoS">
-  <option value="LTF ChoCh">
-  <option value="LTF BoS">
-</datalist>
-
-<section id="alerts-sec" style="display:none">
-  <div style="margin-bottom:4px"><label>Alert from this drawing</label>
-    <div class="seg">
-      <button id="seg-alert-price" class="active" onclick="segAlert('price')">Price /alert</button>
-      <button id="seg-alert-candle" onclick="segAlert('candle')">Candle /ccalert</button>
-    </div>
-  </div>
-  <div class="row">
-    <div><label>Price</label><input id="tv-alert-price" type="number" step="0.01" oninput="refreshAlert()"></div>
-    <div><label>Notes</label><input id="tv-alert-notes" list="note-presets" placeholder="ChoCh, BoS, LTF ChoCh, LTF BoS or type your own" oninput="refreshAlert()"></div>
-  </div>
-  <div class="row" id="tv-alert-candle-fields" style="display:none">
-    <div><label>TF</label><select id="tv-alert-tf" onchange="refreshAlert()"><option>M5</option><option>M15</option><option selected>M30</option><option>H1</option><option>H4</option><option>D1</option></select></div>
-    <div><label>Dir</label><select id="tv-alert-dir" onchange="refreshAlert()"><option value="above">Above</option><option value="below">Below</option></select></div>
-    <div><label>Symbol</label><input id="tv-alert-sym" type="text" value="XAUUSD" oninput="refreshAlert()"></div>
-  </div>
-  <div class="row" style="margin-top:8px">
-    <button onclick="prefillAlert('sl')" style="background:#444">Use SL</button>
-    <button onclick="prefillAlert('tp')" style="background:#444">Use TP</button>
-  </div>
-  <div class="inline"><input id="tv-alert-all" type="checkbox" onchange="refreshAlert()"><label for="tv-alert-all">Broadcast (--all)</label></div>
-  <div class="cmd" id="tv-alert-cmd"></div>
-  <button onclick="copyAlertCmd()">Copy alert</button>
-</section>
-
 <script>
-const S={orderType:'pending',dir:'long'};
+const S={dir:'long'};
 let CLIP=null;
 
 function $(id){return document.getElementById(id);}
@@ -148,16 +116,6 @@ function copyCmd(){
   $('tv-readout').textContent='Copied: '+cmd;
   setTimeout(refresh,1500);
 }
-function copyAlertCmd(){
-  const cmd=$('tv-alert-cmd').textContent;
-  if(!cmd)return;
-  navigator.clipboard.writeText(cmd).catch(()=>{
-    const t=document.createElement('textarea');t.value=cmd;t.style.cssText='position:fixed;opacity:0';
-    document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);
-  });
-  $('tv-readout').textContent='Copied alert: '+cmd;
-  setTimeout(refresh,1500);
-}
 
 function setSelect(id,val){
   const sel=$(id);
@@ -166,37 +124,6 @@ function setSelect(id,val){
   o.value=String(val);o.textContent=String(val);
   sel.appendChild(o);sel.value=String(val);
 }
-
-// Alert builder (/alert and /ccalert) fed from the drawing
-function segAlert(kind){
-  $('seg-alert-price').classList.toggle('active',kind==='price');
-  $('seg-alert-candle').classList.toggle('active',kind==='candle');
-  $('tv-alert-candle-fields').style.display=kind==='candle'?'':'none';
-  refreshAlert();
-}
-function prefillAlert(which){
-  const e=parseFloat($('tv-entry').value),s=parseFloat($('tv-sl').value),
-        tp=parseFloat($('tv-tp').value);
-  const price=which==='sl'?s:tp;
-  if(price==null||isNaN(price))return;
-  $('tv-alert-price').value=price;
-  // long: the SL sits below (alert 'below'); short: above
-  $('tv-alert-dir').value=S.dir==='short'?'above':'below';
-  refreshAlert();
-}
-function refreshAlert(){
-  const p=$('tv-alert-price').value;
-  const notes=$('tv-alert-notes').value;
-  if(!p){$('tv-alert-cmd').textContent='';return;}
-  const cmd=ALERT_KIND==='candle'
-    ?['/ccalert',$('tv-alert-tf').value,p,$('tv-alert-dir').value,
-      $('tv-alert-sym').value||'XAUUSD']
-    :['/alert',p];
-  if(notes)cmd.push(notes);
-  if($('tv-alert-all').checked)cmd.push('--all');
-  $('tv-alert-cmd').textContent=cmd.join(' ');
-}
-let ALERT_KIND='price';
 
 function setDir(d){
   S.dir=d;
@@ -382,7 +309,6 @@ function fillTrade(clip){
   $('dir-short').classList.toggle('active',t.dir==='short');
   $('trade-card').style.display='';
   $('builder').style.display='';
-  $('alerts-sec').style.display='';
 
   // --- prefills from the drawing ---
   const e=parseFloat(t.entry),s=parseFloat(t.sl),tp=parseFloat(t.tp);
@@ -399,15 +325,11 @@ function fillTrade(clip){
   const tfMap={'5':'M5','15':'M15','30':'M30','60':'H1','240':'H4','1440':'D1'};
   if(iv!=null&&tfMap[String(iv)]){
     const tf=tfMap[String(iv)];
-    for(const selId of ['tv-alert-tf','tv-cc-tf']){
-      const sel=$(selId);
-      for(const o of sel.options){if(o.value===tf){sel.value=tf;break;}}
-    }
+    const sel=$('tv-cc-tf');
+    for(const o of sel.options){if(o.value===tf){sel.value=tf;break;}}
   }
-  if(t.symbol){$('tv-alert-sym').value=t.symbol;}
 
   refresh();
-  refreshAlert();
 }
 
 // -------------------------------------------------------------
@@ -467,5 +389,4 @@ function updateReadout(){
   $('tv-readout').textContent=lines.join('\n');
 }
 refresh();
-refreshAlert();
 </script>

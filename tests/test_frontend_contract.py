@@ -60,16 +60,20 @@ class TradingViewImportContractTest(unittest.TestCase):
         self.assertNotIn("'/m'", self.tv)
         self.assertIn("'/p'", self.tv)
 
+    def test_no_alert_builder(self) -> None:
+        # Strictly a pending-order page: no /alert or /ccalert UI.
+        self.assertNotIn("tv-alert", self.tv)
+        self.assertNotIn("prefillAlert", self.tv)
+        self.assertNotIn("note-presets", self.tv)
+        self.assertNotIn("refreshAlert", self.tv)
+
     def test_prefills_present(self) -> None:
-        # RR derived from the drawing, risk% from the clip, alert builder
-        # fed from the drawing (Use SL / Use TP).
+        # RR derived from the drawing, risk% from the clip, candle TF
+        # prefilled for the CC guard.
         self.assertIn("setSelect('tv-rr'", self.tv)
         self.assertIn("sources.0.source.state.risk", self.tv)
-        self.assertIn("prefillAlert", self.tv)
-        self.assertIn('id="tv-alert-cmd"', self.tv)
-        self.assertIn('id="tv-alert-price"', self.tv)
         self.assertIn("Bot TP at RR", self.tv)
-        self.assertIn('id="note-presets"', self.tv)
+        self.assertIn("tv-cc-tf", self.tv)
 
 
 class FrontendContractTest(unittest.TestCase):
