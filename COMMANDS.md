@@ -392,7 +392,7 @@ Lists all active manual alerts for the calling chat.
 ```
 
 **Behavior:**
-- Shows each alert as `(ID) SYMBOL @ TARGET - notes`.
+- Shows each alert as `<code>ID</code> - notes` (the ID is tap-to-copy; no symbol or price).
 - If none: `no active alerts.`
 
 ---
@@ -441,8 +441,7 @@ Lists all active candle-close alerts for the calling chat.
 ```
 
 **Behavior:**
-- Shows each alert as `(ID) [guard #N] SYMBOL TF close DIRECTION @ TARGET - notes`.
-- CC guards show `[guard #position_id]`.
+- Shows each alert as `<code>ID</code> - notes` (the ID is tap-to-copy; no symbol, TF, or price).
 - If none: `no active candle alerts.`
 
 ---

@@ -106,8 +106,11 @@ class AlertSetTests(unittest.TestCase):
         alerts = [Alert("AB12", 111, "XAUUSD", 2450.0, CROSSING_UP, "n1"),
                   Alert("CD34", 111, "EURUSD", 1.1, CROSSING_DOWN, "n2")]
         text = fmt.alert_list(alerts)
-        self.assertIn("AB12", text)
-        self.assertIn("CD34", text)
+        # minimal: tap-to-copy id + note only (no symbol, no price)
+        self.assertIn("<code>AB12</code> - n1", text)
+        self.assertIn("<code>CD34</code> - n2", text)
+        self.assertNotIn("XAUUSD", text)
+        self.assertNotIn("@", text)
 
 
 class OrderSuccessTests(unittest.TestCase):
@@ -313,8 +316,9 @@ class CandleAlertTests(unittest.TestCase):
                               CANDLE_BELOW, "n2")]
         text = fmt.candle_alert_list(alerts)
         self.assertIn("active candle alerts:", text)
-        self.assertIn("AB12", text)
-        self.assertIn("CD34", text)
+        self.assertIn("<code>AB12</code> - n1", text)
+        self.assertIn("<code>CD34</code> - n2", text)
+        self.assertNotIn("XAUUSD", text)
 
     def test_candle_alert_list_empty(self):
         self.assertEqual(
@@ -326,7 +330,7 @@ class CandleAlertTests(unittest.TestCase):
         self.assertIn("/cccancel", fmt.candle_cancel_usage())
         self.assertIn("/ccalert", fmt.candle_alert_usage())
 
-    def test_candle_alert_list_tags_guards(self):
+    def test_candle_alert_list_guards_minimal(self):
         alerts_list = [
             CandleAlert("AB12", 111, "XAUUSD", "M15", 2450.0,
                         CANDLE_ABOVE, "n1"),
@@ -335,8 +339,10 @@ class CandleAlertTests(unittest.TestCase):
                         action="close", position_id=42, account="demo"),
         ]
         text = fmt.candle_alert_list(alerts_list)
-        self.assertIn("[guard #42]", text)
-        self.assertNotIn("[guard", text.splitlines()[1])  # first line (n1) no tag
+        self.assertIn("<code>AB12</code> - n1", text)
+        self.assertIn("<code>CD34</code> - guard", text)
+        self.assertNotIn("[guard", text)   # no tag decoration anymore
+        self.assertNotIn("XAUUSD", text)
 
 
 class CCGuardFormattingTests(unittest.TestCase):

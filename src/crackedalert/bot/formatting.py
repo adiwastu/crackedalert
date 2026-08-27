@@ -160,9 +160,10 @@ def no_alerts() -> str:
 def alert_list(alerts: List[Alert]) -> str:
     lines = ["active alerts:"]
     for a in alerts:
-        lines.append("(%s) %s @ %s - %s"
-                     % (esc(a.id), esc(a.symbol), _trim(a.target),
-                        esc(a.message)))
+        line = "<code>%s</code>" % esc(a.id)   # tap-to-copy id
+        if getattr(a, "message", None):
+            line += " - %s" % esc(a.message)
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -404,11 +405,10 @@ def candle_alert_list(alerts: List[CandleAlert]) -> str:
         return "no active candle alerts."
     lines = ["active candle alerts:"]
     for a in alerts:
-        direction = "above" if a.direction == CANDLE_ABOVE else "below"
-        tag = " [guard #%d]" % a.position_id if a.action == "close" else ""
-        lines.append("(%s)%s  %s %s close %s %s - %s"
-                     % (esc(a.id), esc(tag), esc(a.symbol), esc(a.timeframe),
-                        esc(direction), _trim(a.target), esc(a.message)))
+        line = "<code>%s</code>" % esc(a.id)   # tap-to-copy id
+        if getattr(a, "message", None):
+            line += " - %s" % esc(a.message)
+        lines.append(line)
     return "\n".join(lines)
 
 
