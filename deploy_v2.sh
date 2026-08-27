@@ -71,6 +71,18 @@ rm -rf /var/www/crackedalert-ui
 mkdir -p /var/www/crackedalert-ui
 cp -r "$REPO_DIR/frontend/." /var/www/crackedalert-ui/
 
+# Stamp the package version into the served UI pages (they carry a
+# __VERSION__ token in the header) so the page always shows the version
+# of the bot that is actually deployed -- no manual UI edits needed.
+UI_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' \
+    "$REPO_DIR/src/crackedalert/__init__.py" | head -1)"
+if [ -n "$UI_VERSION" ]; then
+    sed -i "s/__VERSION__/$UI_VERSION/g" \
+        /var/www/crackedalert-ui/ui.html \
+        /var/www/crackedalert-ui/tv.html
+    echo "=> UI stamped with version $UI_VERSION"
+fi
+
 # Migrate the legacy root-domain block (hotland3x3.my.id) if it was
 # previously auto-managed, so a rerun moves the site to the subdomain
 # instead of leaving a stale duplicate block behind.

@@ -30,8 +30,9 @@ class TradingViewImportContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.tv = TV_PATH.read_text(encoding="utf-8")
 
-    def test_version_bumped(self) -> None:
-        self.assertRegex(self.tv, r"v2\.0\.\d+")
+    def test_version_token_present(self) -> None:
+        # Same __VERSION__ stamping as ui.html (see deploy_v2.sh).
+        self.assertIn("__VERSION__", self.tv)
 
     def test_clipboard_parser_present(self) -> None:
         self.assertIn("data-tradingview-clip", self.tv)
@@ -83,10 +84,11 @@ class FrontendContractTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.ui = UI_PATH.read_text(encoding="utf-8")
 
-    def test_version_bumped(self) -> None:
-        # Sanity: the header version is a 3-part semver so bumping is
-        # visible on the page itself.
-        self.assertRegex(self.ui, r"v2\.0\.\d+")
+    def test_version_token_present(self) -> None:
+        # The header carries a __VERSION__ token; deploy_v2.sh stamps the
+        # deployed bot's version into the served copy, so the page always
+        # shows the real version without manual UI edits.
+        self.assertIn("__VERSION__", self.ui)
 
     def test_broadcast_toggles_present(self) -> None:
         # Alert-all broadcasts are exposed as checkboxes in the UI.
