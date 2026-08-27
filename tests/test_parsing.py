@@ -12,6 +12,24 @@ class AlertParsing(unittest.TestCase):
         self.assertEqual((a.target, a.symbol), (2450.0, "XAUUSD"))
         self.assertEqual(a.message, "Price target reached.")
 
+
+class GuardParsing(unittest.TestCase):
+    def test_guard_valid(self):
+        self.assertEqual(handlers.parse_guard("/guard 4467051 4080 H1"),
+                         (4467051, 4080.0, "H1", False))
+
+    def test_guard_broadcast(self):
+        self.assertEqual(
+            handlers.parse_guard("/guard 1 4080 m15 --all"),
+            (1, 4080.0, "M15", True))
+
+    def test_guard_invalid(self):
+        for text in ["/guard", "/guard abc 4080 H1",
+                     "/guard 1 abc H1", "/guard 1 4080 XX",
+                     "/guard 1 4080"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_guard(text)
+
     KNOWN = {"XAUUSD", "EURUSD", "US30"}
 
     def test_with_symbol_and_message(self):

@@ -124,6 +124,11 @@ def close_all_usage() -> str:
     return usage("/close_all", "[account]", "/close_all live100k")
 
 
+def guard_usage() -> str:
+    return usage("/guard", "[position_id] [price] [tf] [--all]",
+                 "/guard 4467051 4080 H1 --all")
+
+
 def cancel_order_usage() -> str:
     return usage("/cancel_order", "[id] [account]",
                  "/cancel_order 4467051 live100k")
@@ -494,6 +499,7 @@ BOT_COMMANDS = [
     ("m", "market order"),
     ("p", "pending order"),
     ("be", "SL to breakeven"),
+    ("guard", "candle-close guard on an open position"),
     ("close", "close a position"),
     ("close_all", "close everything"),
     ("cancel_order", "cancel a pending order"),

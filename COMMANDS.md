@@ -161,6 +161,34 @@ Moves the stop-loss to breakeven + spread buffer on **every** open position on t
 
 ---
 
+### `/guard` — Attach a Candle-Close Guard to an Open Position
+
+Attaches a soft candle-close stop to a position that is **already open** —
+the same mechanism `--smart-sl` uses at trade time. When a candle of the
+given TF **closes past** the level (below for a BUY, above for a SELL),
+the bot closes the position at market. The broker-side SL/TP is untouched.
+
+**Syntax:**
+```
+/guard <position_id> <price> <tf> [--all]
+```
+
+**Examples:**
+```
+/guard 4467051 4080 H1
+/guard 4467051 4080 H1 --all
+```
+
+**Behavior:**
+- Searches all configured accounts for the position; derives the close
+  direction from its side.
+- Creates a CC guard in the candle store (visible in `/cclist`, removable
+  with `/cccancel`); the feed starts polling the TF automatically.
+- `--all` marks the guard as broadcast — when it fires, everyone gets the notice.
+- `position <id> not found.` if no open position matches.
+
+---
+
 ### `/close` — Close a Single Position
 
 Closes one open position at its full volume.

@@ -193,6 +193,37 @@ def parse_trade(text: str, is_market: bool) -> TradeArgs:
                      broadcast=broadcast)
 
 
+def parse_guard(text: str) -> tuple:
+    """/guard <position_id> <price> <tf> [--all]
+
+    Attaches a candle-close guard to an EXISTING position: when a <tf>
+    candle CLOSES past <price> (below for a BUY, above for a SELL), the
+    position is closed at market. Same soft-stop semantics as --smart-sl,
+    but for a position that is already open. --all broadcasts the guard.
+    """
+    tokens = text.split()
+    if len(tokens) < 2:
+        raise ParseError("expected /guard <position_id> <price> <tf> [--all]")
+    rest = tokens[1:]
+    broadcast = _pop_broadcast(rest)
+    if len(rest) != 3:
+        raise ParseError("expected /guard <position_id> <price> <tf> [--all]")
+    try:
+        position_id = int(rest[0])
+    except ValueError:
+        raise ParseError("position id is not a number")
+    try:
+        price = float(rest[1])
+    except ValueError:
+        raise ParseError("guard price is not a number")
+    tf = rest[2].upper()
+    if tf not in candles_mod.TIMEFRAMES:
+        raise ParseError(
+            "guard timeframe '%s' is not valid. Use: %s"
+            % (tf, " ".join(candles_mod.TIMEFRAMES)))
+    return position_id, price, tf, broadcast
+
+
 def _is_number(token: str) -> bool:
     try:
         float(token)
@@ -301,6 +332,7 @@ class Handlers:
         app.add_handler(CommandHandler("close", self.close_position))
         app.add_handler(CommandHandler("cancel_order", self.cancel_order))
         app.add_handler(CommandHandler("be", self.breakeven))
+        app.add_handler(CommandHandler("guard", self.guard))
         app.add_handler(CommandHandler("ccalert", self.cc_alert))
         app.add_handler(CommandHandler("cclist", self.cc_list))
         app.add_handler(CommandHandler("cccancel", self.cc_cancel))
@@ -575,6 +607,54 @@ class Handlers:
         trendbar polling instead of leaking forever."""
         if self._candle_store is not None and self._candle_feed is not None:
             self._candle_feed.sync_keys(self._candle_store.active_keys())
+
+    async def guard(self, update: Update,
+                    _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Attach a candle-close guard to an existing open position.
+
+        Finds the position across all configured accounts, derives the
+        close direction from its side (BUY closes below, SELL closes
+        above), and registers the guard like --smart-sl does at trade
+        time. The broker-side SL/TP is untouched.
+        """
+        if not self._allowed(update):
+            return
+        if self._candle_store is None or self._candle_feed is None:
+            await self._reply(update, "candle alerts are not wired up.")
+            return
+        try:
+            position_id, price, tf, broadcast = parse_guard(
+                update.effective_message.text)
+        except ParseError:
+            await self._reply(update, fmt.guard_usage())
+            return
+        for shortcode in self._settings.accounts:
+            try:
+                rows = await self._trader.positions_or_orders(
+                    shortcode, is_positions=True)
+            except (TradeRejected, CTraderError):
+                continue
+            for row in rows:
+                if int(row.get("id", 0) or 0) != position_id:
+                    continue
+                side = row.get("side", "")
+                symbol = row.get("symbol", "")
+                cc_direction = (alerts_mod.CANDLE_BELOW
+                                if side == "BUY"
+                                else alerts_mod.CANDLE_ABOVE)
+                alert = self._candle_store.create(
+                    update.effective_chat.id, symbol, tf, price,
+                    cc_direction,
+                    "cc guard for position %d" % position_id,
+                    action="close", position_id=position_id,
+                    account=shortcode, broadcast=broadcast)
+                self._candle_feed.add_symbol(symbol, tf)
+                log.info("cc guard %s attached to position %d (%s %s)",
+                         alert.id, position_id, symbol, side)
+                await self._reply(update, fmt.cc_guard_set(alert))
+                return
+        await self._reply(update,
+                          "position %d not found." % position_id)
 
     async def cc_alert(self, update: Update,
                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
