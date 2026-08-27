@@ -105,10 +105,10 @@ def plan_market(bid: float, ask: float, sl: float, widen: bool, rr: float,
                 lot_step: float = 0.01,
                 risk_usd: Optional[float] = None,
                 smart_sl: Optional[float] = None) -> TradePlan:
-    """Market order: entry reference is the side MT5/cTrader actually fills.
+    """Market order: entry reference is the side cTrader actually fills.
 
-    Direction is inferred against the mid-price (bash parity), then the
-    math entry becomes ask for BUY, bid for SELL.
+    Direction is inferred against the mid-price, then the math entry
+    becomes ask for BUY, bid for SELL.
 
     risk_usd overrides the percentage-based risk (dollar mode): when set,
     risk_pct is ignored and the exact dollar amount is used.

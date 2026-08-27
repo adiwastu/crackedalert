@@ -45,10 +45,6 @@ class Settings:
     def db_file(self) -> str:
         return os.path.join(self.data_dir, "cracked.db")
 
-    @property
-    def legacy_tsv(self) -> str:
-        return os.path.join(self.data_dir, "cracked_alerts.tsv")
-
     def environments_in_use(self) -> List[str]:
         return sorted({a.environment for a in self.accounts.values()})
 

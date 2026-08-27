@@ -60,7 +60,8 @@ class _ConflictFilter(logging.Filter):
         if exc_type is not None and exc_type.__name__ == "Conflict":
             record.exc_info = None
             record.msg = ("Telegram 409: another bot instance is polling this "
-                          "token -- use bin/use_new.sh to switch cleanly")
+                          "token -- stop that instance "
+                          "(service: systemctl stop cracked-bot)")
             record.args = ()
         return True
 
@@ -132,9 +133,6 @@ async def _run_bot(settings: Settings) -> None:
                         settings.ctrader_client_secret)
 
     store = AlertStore(settings.db_file)
-    imported = store.import_tsv(settings.legacy_tsv)
-    if imported:
-        log.info("migrated %d alerts from the bash bot", imported)
 
     candle_store = CandleAlertStore(settings.db_file)
 

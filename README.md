@@ -90,10 +90,10 @@ Create `.env` in the project root with the vars above. Set `CRACKED_DATA_DIR=./d
 ## Deploy
 
 ```bash
-sudo ./deploy.sh
+sudo ./deploy_v2.sh
 ```
 
-Creates `/etc/cracked_alert/`, installs the systemd units, and starts the services. Check logs with `journalctl -u cracked-bot -f`.
+Installs into `/opt/crackedalert`, runs a connection smoke test, restarts the `cracked-bot` systemd service, and serves the UI via Caddy. Check logs with `journalctl -u cracked-bot -f`.
 
 Set `YOUR_DOMAIN` in `deploy/caddy-ui.caddyfile` to your server's domain before deploying.
 

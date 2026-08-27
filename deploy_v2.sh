@@ -2,9 +2,8 @@
 
 # ==========================================
 # CRACKED ALERT v2 (cTrader) - DEPLOYMENT
-# Replaces deploy.sh at the Phase 5 cutover.
-# Old bash stack (cracked-listener/checker) is NOT touched here
-# until the CUTOVER block at the bottom is uncommented.
+# Single-service deploy: venv install -> smoke test ->
+# cracked-bot restart + Caddy-hosted UI.
 # ==========================================
 
 set -euo pipefail
@@ -103,7 +102,7 @@ systemctl reload caddy
 echo "✅ UI live at http://alert.hotland3x3.my.id/ui.html"
 
 # ==========================================
-# CUTOVER (Phase 5): retire the bash stack.
+# Cleanup: disable leftover legacy units (no-op on fresh boxes).
 # ==========================================
-systemctl disable --now cracked-listener.service cracked-checker.service
-echo "🪦 bash stack retired."
+systemctl disable --now cracked-listener.service cracked-checker.service 2>/dev/null || true
+echo "🪦 legacy units disabled (if present)."

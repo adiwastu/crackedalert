@@ -1,8 +1,8 @@
-"""Golden tests: risk.py must reproduce the bash/AWK engine's numbers.
+"""Golden tests pinning the risk.plan_market / plan_pending math.
 
-Hand-computed against bin/cracked_listener.sh logic (widen = 1.00 as of the
-10-pip change). The single sanctioned difference is D9: lots floor to the
-step instead of printf %.2f rounding.
+Values hand-computed from the documented rules (widen adds a fixed 1.00
+price unit; RR anchors to the real fill distance). Lots floor to the
+volume step rather than rounding half up.
 """
 
 import unittest

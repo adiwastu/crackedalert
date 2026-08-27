@@ -1,7 +1,7 @@
 """Price alerts: SQLite-backed store + tick-driven crossing engine.
 
-Replaces cracked_alerts.tsv and the 5-second polling checker. Alerts fire
-off the live tick stream (bid/ask midpoint) and are deleted after firing.
+Alerts fire off the live tick stream (bid/ask midpoint) and are deleted
+after firing.
 
 Manual /alert alerts notify the owning chat; --all alerts broadcast to
 every subscriber.
@@ -169,37 +169,6 @@ class AlertStore:
         self._db.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
         self._db.commit()
 
-    # ------------------------------------------------------------------
-    # legacy migration
-    # ------------------------------------------------------------------
-    def import_tsv(self, tsv_path: str) -> int:
-        """One-shot import of the bash bot's TSV; renames it .imported."""
-        import os
-        if not os.path.exists(tsv_path):
-            return 0
-        imported = 0
-        with open(tsv_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 6:
-                    continue
-                alert_id, chat_id, symbol, target, direction, message = parts[:6]
-                if not alert_id or direction not in (CROSSING_UP, CROSSING_DOWN):
-                    continue
-                try:
-                    self._db.execute(
-                        "INSERT OR IGNORE INTO alerts "
-                        "(id, chat_id, symbol, target, direction, message, "
-                        "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (alert_id.upper(), int(chat_id), symbol.upper(),
-                         float(target), direction, message, int(time.time())))
-                    imported += 1
-                except (ValueError, sqlite3.Error):
-                    log.warning("skipping malformed TSV row: %r", line.strip())
-        self._db.commit()
-        os.replace(tsv_path, tsv_path + ".imported")
-        log.info("imported %d legacy alerts from %s", imported, tsv_path)
-        return imported
 
 
 Notifier = Callable[[int, str], Awaitable[None]]  # (chat_id, text)

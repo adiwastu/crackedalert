@@ -55,22 +55,6 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(by_id[plain.id])
         self.assertTrue(by_id[bcast.id])
 
-    def test_tsv_import(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tsv = os.path.join(tmp, "cracked_alerts.tsv")
-            with open(tsv, "w", encoding="utf-8") as f:
-                f.write("AB12\t111\tXAUUSD\t2450.00\tCROSSING_UP\tzone\n")
-                f.write("badline\n")
-                f.write("CD34\t222\tXAUUSD\t2400.00\tCROSSING_DOWN\tsupport\n")
-            count = self.store.import_tsv(tsv)
-            self.assertEqual(count, 2)
-            self.assertTrue(os.path.exists(tsv + ".imported"))
-            self.assertEqual(len(self.store.for_chat(111)), 1)
-            self.assertEqual(len(self.store.for_chat(222)), 1)
-
-    def test_import_missing_file_is_noop(self):
-        self.assertEqual(self.store.import_tsv("/nonexistent/file.tsv"), 0)
-
 
 class EngineTests(unittest.TestCase):
     def setUp(self):

@@ -2,8 +2,8 @@
 
 # ==========================================
 # Launch the v2 bot with whichever venv exists.
-# Shared by systemd (cracked-bot.service) and
-# bin/use_new.sh so both agree on the python.
+# Shared by systemd (cracked-bot.service) and manual
+# foreground runs so both agree on the python.
 #
 # Override with CRACKED_PYTHON=/path/to/bin/python
 # ==========================================
