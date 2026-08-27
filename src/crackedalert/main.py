@@ -9,6 +9,7 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from typing import Dict, Optional, Set, Tuple
 
 from telegram import BotCommand
@@ -28,6 +29,7 @@ from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
 from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService, TradeRejected
+from .fvg import fresh_imbalance
 
 log = logging.getLogger("crackedalert.main")
 
@@ -308,6 +310,45 @@ async def _run_bot(settings: Settings) -> None:
 
     refresh_task = asyncio.get_running_loop().create_task(
         tokens.refresh_loop(on_failure=on_token_failure))
+
+    # ------------------------------------------------------------------
+    # H1 fair-value-gap watch: once per closed H1 candle, broadcast a
+    # full --all alert (all subscribers + the alarm app) when the newest
+    # completed candle forms a fresh imbalance. One trendbar fetch/hour.
+    # ------------------------------------------------------------------
+    async def check_h1_imbalance() -> None:
+        env = feed_account.environment
+        info = await markets[env].ensure_symbol(
+            feed_account.ctid_account_id, settings.trade_symbol)
+        _, payload = await clients[env].request(ct.PT_GET_TRENDBARS_REQ, {
+            "ctidTraderAccountId": feed_account.ctid_account_id,
+            "symbolId": info.symbol_id,
+            "period": "H1",
+            "toTimestamp": int(time.time() * 1000),
+            "count": 3,
+        })
+        bars = payload.get("trendbar", []) or []
+        bars = sorted(
+            bars, key=lambda b: int(b.get("utcTimestampInMinutes", 0) or 0))
+        which = fresh_imbalance(bars)
+        if which is not None:
+            text = "new %s imbalance on H1" % which
+            log.info("H1 imbalance: %s", text)
+            await broadcast(text)
+
+    async def imbalance_watcher() -> None:
+        """Check shortly after every UTC hour boundary."""
+        while True:
+            now = time.time()
+            next_hour = (int(now // 3600) + 1) * 3600
+            await asyncio.sleep(next_hour - now + 5)
+            try:
+                await check_h1_imbalance()
+            except Exception:
+                log.exception("H1 imbalance check failed")
+
+    imbalance_task = asyncio.get_running_loop().create_task(
+        imbalance_watcher())
 
     for cli in clients.values():
         cli.start()
