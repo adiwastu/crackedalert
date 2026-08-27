@@ -6,7 +6,10 @@ gap on XAUUSD (2400s) and a bearish gap on EURUSD (1.08s).
 
 import unittest
 
-from crackedalert.fvg import fresh_imbalance
+from crackedalert.alerts import (CANDLE_ABOVE, CANDLE_BELOW,
+                                 CROSSING_DOWN, CROSSING_UP)
+from crackedalert.fvg import (IMBALANCE_ALERT_SPECS, candle_high,
+                              candle_low, fresh_imbalance)
 
 SCALE = 100000
 
@@ -18,6 +21,51 @@ def bar(ts, low, delta_high, delta_close=0):
         "deltaHigh": delta_high,
         "deltaClose": delta_close,
     }
+
+
+class CandleLevelTests(unittest.TestCase):
+    def test_candle_high_and_low(self):
+        b = bar(100, 239850000, 350000)     # low 2398.50 high 2402.00
+        self.assertAlmostEqual(candle_low(b), 2398.50)
+        self.assertAlmostEqual(candle_high(b), 2402.00)
+
+
+class ImbalanceAlertSpecTests(unittest.TestCase):
+    """The auto-alert table for a fresh imbalance (both --all)."""
+
+    def test_bullish_creates_two_alerts(self):
+        specs = IMBALANCE_ALERT_SPECS["bullish"]
+        self.assertEqual(len(specs), 2)
+        kind, level, direction, note = specs[0]
+        self.assertEqual((kind, level, direction),
+                         ("price", "high1", CROSSING_DOWN))
+        self.assertEqual(note, "masuk DH1. WATCH!")
+        kind, level, direction, note = specs[1]
+        self.assertEqual((kind, level, direction),
+                         ("candle", "low1", CANDLE_BELOW))
+        self.assertEqual(note, "strike 1 of FLIP to the DOWNSIDE. WATCH!")
+
+    def test_bearish_creates_two_alerts(self):
+        specs = IMBALANCE_ALERT_SPECS["bearish"]
+        self.assertEqual(len(specs), 2)
+        kind, level, direction, note = specs[0]
+        self.assertEqual((kind, level, direction),
+                         ("price", "low1", CROSSING_UP))
+        self.assertEqual(note, "masuk S H1. WATCH!")
+        kind, level, direction, note = specs[1]
+        self.assertEqual((kind, level, direction),
+                         ("candle", "high1", CANDLE_ABOVE))
+        self.assertEqual(note, "strike 1 of FLIP to the UPSIDE. WATCH!")
+
+    def test_all_specs_reference_existing_levels_and_directions(self):
+        for specs in IMBALANCE_ALERT_SPECS.values():
+            for kind, level, direction, note in specs:
+                self.assertIn(kind, ("price", "candle"))
+                self.assertIn(level, ("high1", "low1"))
+                self.assertIn(direction,
+                              (CROSSING_UP, CROSSING_DOWN,
+                               CANDLE_ABOVE, CANDLE_BELOW))
+                self.assertTrue(note)
 
 
 class FreshImbalanceTests(unittest.TestCase):

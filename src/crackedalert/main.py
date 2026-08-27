@@ -29,7 +29,8 @@ from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
 from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService, TradeRejected
-from .fvg import fresh_imbalance
+from .fvg import IMBALANCE_ALERT_SPECS, candle_high, candle_low, \
+    fresh_imbalance
 
 log = logging.getLogger("crackedalert.main")
 
@@ -331,10 +332,27 @@ async def _run_bot(settings: Settings) -> None:
         bars = sorted(
             bars, key=lambda b: int(b.get("utcTimestampInMinutes", 0) or 0))
         which = fresh_imbalance(bars)
-        if which is not None:
-            text = "new %s imbalance on H1" % which
-            log.info("H1 imbalance: %s", text)
-            await broadcast(text)
+        if which is None:
+            return
+        text = "new %s imbalance on H1" % which
+        log.info("H1 imbalance: %s", text)
+        await broadcast(text)
+        # Auto-create the two --all alerts for this setup: a price alert
+        # on candle 1's entry level and an H1 close alert for the flip.
+        c1 = bars[-3]
+        levels = {"high1": candle_high(c1), "low1": candle_low(c1)}
+        owner = settings.allowed_chat_ids[0]
+        for kind, level_key, direction, note in IMBALANCE_ALERT_SPECS[which]:
+            level = levels[level_key]
+            if kind == "price":
+                store.create(owner, settings.trade_symbol, level,
+                             direction, note, broadcast=True)
+            else:
+                candle_store.create(owner, settings.trade_symbol, "H1",
+                                    level, direction, note, broadcast=True)
+                candle_feed.add_symbol(settings.trade_symbol, "H1")
+            log.info("imbalance %s: %s alert at %.2f (%s)",
+                     which, kind, level, note)
 
     async def imbalance_watcher() -> None:
         """Check shortly after every UTC hour boundary."""

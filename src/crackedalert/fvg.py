@@ -13,10 +13,41 @@ which is exactly what this module checks. Bars must be consecutive
 (same timeframe) and newest-last.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+from .alerts import CANDLE_ABOVE, CANDLE_BELOW, CROSSING_DOWN, CROSSING_UP
 
 # Trendbar prices are ints scaled by PRICE_SCALE (see ctrader/candles.py).
 PRICE_SCALE = 100000
+
+# Auto-alerts created when a fresh imbalance forms. Each entry:
+# (kind, candle-1 level to watch, alert direction, note).
+# Bullish (1->2->3 up): enter the demand zone at candle1.high, and the
+# flip trigger is an H1 close below candle1.low.
+# Bearish: enter the supply zone at candle1.low, and the flip trigger is
+# an H1 close above candle1.high.
+IMBALANCE_ALERT_SPECS: dict = {
+    "bullish": (
+        ("price", "high1", CROSSING_DOWN, "masuk DH1. WATCH!"),
+        ("candle", "low1", CANDLE_BELOW,
+         "strike 1 of FLIP to the DOWNSIDE. WATCH!"),
+    ),
+    "bearish": (
+        ("price", "low1", CROSSING_UP, "masuk S H1. WATCH!"),
+        ("candle", "high1", CANDLE_ABOVE,
+         "strike 1 of FLIP to the UPSIDE. WATCH!"),
+    ),
+}
+
+
+def candle_high(bar: dict) -> float:
+    """Absolute high of one completed trendbar."""
+    return _high(bar)
+
+
+def candle_low(bar: dict) -> float:
+    """Absolute low of one completed trendbar."""
+    return _low(bar)
 
 
 def fresh_imbalance(bars: List[dict]) -> Optional[str]:
