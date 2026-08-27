@@ -10,6 +10,7 @@ spans, and emoji side-glyphs. Function signatures are unchanged.
 from html import escape as _html_escape
 from typing import List, Optional
 
+from .. import version as _pkg_version
 from ..alerts import (CANDLE_ABOVE, CANDLE_BELOW, CROSSING_UP, Alert,
                       CandleAlert)
 
@@ -181,9 +182,9 @@ def account_not_found(account: str) -> str:
 
 
 def help_text() -> str:
-    """/help reply: just the command-builder UI and the alarm-app APK."""
+    """/help reply: running version, command-builder UI, alarm-app APK."""
     return "\n".join([
-        "<b>cracked alert</b>",
+        f"<b>cracked alert {_pkg_version()}</b>",
         "",
         "UI: <a href=\"https://alert.hotland3x3.my.id/ui.html\">"
         "alert.hotland3x3.my.id/ui.html</a>",

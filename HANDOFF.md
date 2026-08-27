@@ -180,6 +180,7 @@ single/dual/aged/concurrent configuration the bot doesn't replicate.
 | 2.0.32 | **`--smart-sl` redefined as a soft candle-close stop**: `--smart-sl <price> <tf>` no longer moves the broker-side SL — it arms a guard that closes the position when a `<tf>` candle CLOSES past the level (validated between fill and original SL). ui.html gains a Candle-TF select for it; combining with the positional CC pair is rejected |
 | 2.0.33 | Smart-SL timeframes restricted to `M1 M5 M15 M30 H1` (new `SMART_SL_TIMEFRAMES` in candles.py; parser rejects higher TFs for `--smart-sl` only — CC guards and candle alerts keep the full list); ui.html Candle-TF select drops H4/D1 |
 | 2.0.45 | **Legacy MT5/bash stack removed from the repo entirely**: `bin/cracked_listener.sh`, `bin/cracked_checker.sh`, `bin/use_old.sh`, `bin/use_new.sh`, `deploy.sh`, the listener/checker systemd units, `api.md`, `PLAN.md`, COMMANDS.md §4–§5, and the startup TSV-import bridge (`main.py` / `config.legacy_tsv` / `AlertStore.import_tsv`). No behavior change beyond dropping the TSV no-op at startup |
+| 2.0.49 | `/help` title line shows the running version (`crackedalert.version()` — git-derived `v2.<commits>`, static `__version__` fallback) |
 
 Android app: `android/` committed with debug APK; built locally with
 JDK 21 (`C:\Android\jdk-21`) + Android SDK (`C:\Android\sdk`) + cached

@@ -12,6 +12,7 @@ from html import escape as _html_esc
 
 from crackedalert.alerts import (CANDLE_ABOVE, CANDLE_BELOW, CROSSING_DOWN,
                                  CROSSING_UP, Alert, CandleAlert)
+from crackedalert import version as pkg_version
 from crackedalert.bot import formatting as fmt
 
 
@@ -58,7 +59,7 @@ class EscapingTests(unittest.TestCase):
 
 
 class HelpTextTests(unittest.TestCase):
-    """help_text now returns just the UI + APK links."""
+    """help_text shows the running version + the UI and APK links."""
 
     def test_help_text_has_ui_link(self):
         text = fmt.help_text()
@@ -67,6 +68,12 @@ class HelpTextTests(unittest.TestCase):
     def test_help_text_has_apk_link(self):
         text = fmt.help_text()
         self.assertIn("CrackedAlarm-debug.apk", text)
+
+    def test_help_text_shows_version(self):
+        # exact runtime value embedded (v2.<commits> or static fallback)
+        text = fmt.help_text()
+        self.assertIn(pkg_version(), text)
+        self.assertIn("<b>cracked alert", text)
 
     def test_help_text_no_command_sections(self):
         text = fmt.help_text()

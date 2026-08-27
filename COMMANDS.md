@@ -475,7 +475,7 @@ Deletes a candle-close alert owned by the calling chat.
 
 ### `/help` — Show Help
 
-Shows the command-builder UI link and the Android alarm-app APK download.
+Shows the running bot version, the command-builder UI link, and the Android alarm-app APK download.
 
 **Syntax:**
 ```
@@ -488,6 +488,7 @@ Shows the command-builder UI link and the Android alarm-app APK download.
 ```
 
 **Behavior:**
+- Replies with the running bot version (git-derived `v2.<commits>`, static fallback).
 - Replies with the frontend UI link (`alert.hotland3x3.my.id/ui.html`).
 - Replies with the Android app APK download link (GitHub raw).
 
