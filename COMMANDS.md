@@ -186,6 +186,25 @@ the bot closes the position at market. The broker-side SL/TP is untouched.
 
 ---
 
+### `/imbalance` — Debug the H1 Imbalance Check
+
+Read-only: evaluates the last three **completed** H1 candles right now and
+reports what the imbalance watcher would see (it normally runs once per
+hour, ~5 s after the UTC hour boundary). No alerts are created.
+
+**Syntax:**
+```
+/imbalance
+```
+
+**Behavior:**
+- Shows the last 3 completed H1 candles (timestamp / low / high).
+- `fresh bullish|bearish imbalance on H1` + candle-1 levels when a fresh
+  imbalance is detected; `no fresh imbalance on these candles.` otherwise.
+- A failed check (link down, etc.) replies `imbalance check failed: <reason>`.
+
+---
+
 ### `/close` — Close a Single Position
 
 Closes one open position at its full volume.

@@ -21,6 +21,7 @@ from ..config import Settings
 from ..ctrader import candles as candles_mod
 from ..ctrader.client import CTraderError
 from ..ctrader.trading import TradeRejected
+from ..fvg import candle_high, candle_low
 from . import formatting as fmt
 from .subscriptions import SubscriptionStore
 
@@ -278,13 +279,15 @@ class Handlers:
                  feed, trade_symbol: str, trader=None,
                  candle_store=None, candle_feed=None,
                  subscription_store: Optional[SubscriptionStore] = None,
-                 pending_cc: Optional[dict] = None):
+                 pending_cc: Optional[dict] = None,
+                 imbalance_checker=None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
         # candle_store: CandleAlertStore; candle_feed: CandleFeed
         # subscription_store: dynamic chat allow-list
         # pending_cc: shared dict (main.py) registering pending-order cc
         #   guard params; materialized on fill by main.on_execution
+        # imbalance_checker: main.py's imbalance_verdict() for /imbalance
         self._settings = settings
         self._store = store
         self._feed = feed
@@ -294,6 +297,7 @@ class Handlers:
         self._candle_feed = candle_feed
         self._subscriptions = subscription_store
         self._pending_cc = pending_cc
+        self._imbalance_checker = imbalance_checker
 
     def register(self, app: Application) -> None:
         # un-gated commands
@@ -313,6 +317,7 @@ class Handlers:
         app.add_handler(CommandHandler("cancel_order", self.cancel_order))
         app.add_handler(CommandHandler("be", self.breakeven))
         app.add_handler(CommandHandler("guard", self.guard))
+        app.add_handler(CommandHandler("imbalance", self.imbalance))
         app.add_handler(CommandHandler("ccalert", self.cc_alert))
         app.add_handler(CommandHandler("cclist", self.cc_list))
         app.add_handler(CommandHandler("cccancel", self.cc_cancel))
@@ -635,6 +640,33 @@ class Handlers:
                 return
         await self._reply(update,
                           "position %d not found." % position_id)
+
+    async def imbalance(self, update: Update,
+                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Debug: run the H1 imbalance check on demand and report what the
+        last three completed candles evaluate to. Read-only -- no alerts."""
+        if not self._allowed(update):
+            return
+        if self._imbalance_checker is None:
+            await self._reply(update, "imbalance checker is not wired up.")
+            return
+        try:
+            verdict = await self._imbalance_checker()
+        except Exception as e:
+            await self._reply(update, "imbalance check failed: %s" % e)
+            return
+        lines = ["last 3 completed H1 candles (ts / low / high):"]
+        for b in verdict["bars"][-3:]:
+            lines.append("  %s / %.2f / %.2f"
+                         % (b.get("utcTimestampInMinutes"),
+                            candle_low(b), candle_high(b)))
+        if verdict["which"] is None:
+            lines.append("no fresh imbalance on these candles.")
+        else:
+            lines.append("fresh %s imbalance on H1" % verdict["which"])
+            lines.append("candle-1 levels: high1=%.2f low1=%.2f"
+                         % (verdict["high1"], verdict["low1"]))
+        await self._reply(update, "\n".join(lines))
 
     async def cc_alert(self, update: Update,
                        _ctx: ContextTypes.DEFAULT_TYPE) -> None:

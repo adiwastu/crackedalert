@@ -297,7 +297,8 @@ async def _run_bot(settings: Settings) -> None:
                         trader=trader, candle_store=candle_store,
                         candle_feed=candle_feed,
                         subscription_store=subscription_store,
-                        pending_cc=pending_cc)
+                        pending_cc=pending_cc,
+                        imbalance_checker=lambda: imbalance_verdict())
     handlers.register(app)
 
     # P2: native command menu
@@ -317,7 +318,13 @@ async def _run_bot(settings: Settings) -> None:
     # full --all alert (all subscribers + the alarm app) when the newest
     # completed candle forms a fresh imbalance. One trendbar fetch/hour.
     # ------------------------------------------------------------------
-    async def check_h1_imbalance() -> None:
+    async def imbalance_verdict() -> Optional[dict]:
+        """Fetch the last 3 completed H1 bars and evaluate them.
+
+        Returns {'which': 'bullish'|'bearish'|None, 'high1': float,
+        'low1': float, 'bars': [bar...]} so callers (the hourly watcher
+        and the /imbalance debug command) share one implementation.
+        """
         env = feed_account.environment
         info = await markets[env].ensure_symbol(
             feed_account.ctid_account_id, settings.trade_symbol)
@@ -332,6 +339,23 @@ async def _run_bot(settings: Settings) -> None:
         bars = sorted(
             bars, key=lambda b: int(b.get("utcTimestampInMinutes", 0) or 0))
         which = fresh_imbalance(bars)
+        verdict = {"which": which, "bars": bars, "high1": None, "low1": None}
+        if which is not None and len(bars) >= 3:
+            c1 = bars[-3]
+            verdict["high1"] = candle_high(c1)
+            verdict["low1"] = candle_low(c1)
+        return verdict
+
+    async def check_h1_imbalance() -> None:
+        verdict = await imbalance_verdict()
+        which = verdict["which"]
+        bars = verdict["bars"]
+        log.info("imbalance check: %d completed bar(s) evaluated",
+                 len(bars))
+        for b in bars[-3:]:
+            log.info("  bar ts=%s low=%.5f high=%.5f",
+                     b.get("utcTimestampInMinutes"),
+                     candle_low(b), candle_high(b))
         if which is None:
             return
         text = "new %s imbalance on H1" % which
@@ -339,11 +363,9 @@ async def _run_bot(settings: Settings) -> None:
         await broadcast(text)
         # Auto-create the two --all alerts for this setup: a price alert
         # on candle 1's entry level and an H1 close alert for the flip.
-        c1 = bars[-3]
-        levels = {"high1": candle_high(c1), "low1": candle_low(c1)}
         owner = settings.allowed_chat_ids[0]
         for kind, level_key, direction, note in IMBALANCE_ALERT_SPECS[which]:
-            level = levels[level_key]
+            level = verdict[level_key]
             if kind == "price":
                 store.create(owner, settings.trade_symbol, level,
                              direction, note, broadcast=True)

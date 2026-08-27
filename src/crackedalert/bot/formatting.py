@@ -508,6 +508,7 @@ BOT_COMMANDS = [
     ("alert", "set a price alert"),
     ("ccalert", "candle close alert"),
     ("list", "active alerts"),
+    ("imbalance", "debug: evaluate last H1 candles"),
     ("help", "full command list"),
     ("subscribe", "allow this chat to use the bot"),
     ("unsubscribe", "remove this chat"),
