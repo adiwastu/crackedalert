@@ -333,7 +333,11 @@ async def _run_bot(settings: Settings) -> None:
             "symbolId": info.symbol_id,
             "period": "H1",
             "toTimestamp": int(time.time() * 1000),
-            "count": 3,
+            # Ask for more than we need: the gateway counts the forming
+            # candle in the limit but returns only completed bars, so
+            # count=3 can yield just 2 completed candles and the FVG
+            # check never sees a full triplet.
+            "count": 6,
         })
         bars = payload.get("trendbar", []) or []
         bars = sorted(

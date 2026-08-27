@@ -655,10 +655,12 @@ class Handlers:
         except Exception as e:
             await self._reply(update, "imbalance check failed: %s" % e)
             return
-        lines = ["last 3 completed H1 candles (ts / low / high):"]
-        for b in verdict["bars"][-3:]:
-            lines.append("  %s / %.2f / %.2f"
-                         % (b.get("utcTimestampInMinutes"),
+        bars = verdict["bars"]
+        lines = ["gateway returned %d completed H1 bar(s):" % len(bars)]
+        for b in bars[-3:]:
+            ts = int(b.get("utcTimestampInMinutes", 0) or 0)
+            lines.append("  %02d:%02d UTC / %.2f / %.2f"
+                         % ((ts // 60) % 24, ts % 60,
                             candle_low(b), candle_high(b)))
         if verdict["which"] is None:
             lines.append("no fresh imbalance on these candles.")
