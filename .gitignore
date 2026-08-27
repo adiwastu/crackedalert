@@ -18,3 +18,9 @@ android/app/build/
 android/local.properties
 android/.idea/
 android/captures/
+
+# Personal session notes / agent scratch (deliberately untracked)
+.reasonix/
+reasonix.toml
+SESSION_RECAP.md
+implementation_plan.md
