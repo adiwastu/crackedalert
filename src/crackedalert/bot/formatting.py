@@ -104,11 +104,11 @@ def cancel_usage() -> str:
 def trade_usage(is_market: bool) -> str:
     if is_market:
         return usage("/m",
-                     "[sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price>] [tf guard] [--all]",
-                     "/m 2440.00 y 2 0.5 10k --smart-sl 2435 M15 4080 --all")
+                     "[sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price> <tf>] [--all]",
+                     "/m 2440.00 y 2 0.5 10k --smart-sl 2435 M15 --all")
     return usage("/p",
-                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price>] [tf guard] [--all]",
-                 "/p 2450.00 2455.00 n 3 1 5k --smart-sl 2452 H1 2445 --all")
+                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price> <tf>] [--all]",
+                 "/p 2450.00 2455.00 n 3 1 5k --smart-sl 2452 H1 --all")
 
 
 def positions_usage(is_positions: bool) -> str:

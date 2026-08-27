@@ -29,7 +29,7 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 
 **Syntax:**
 ```
-/m <sl> <widen:y|n> <rr> <risk%|$amount> <account> [--smart-sl <price> <tf>] [<tf> <guard_price>]
+/m <sl> <widen:y|n> <rr> <risk%|$amount> <account> [--smart-sl <price> <tf>]
 ```
 
 **Parameters:**
@@ -41,21 +41,20 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 | 3 | `rr` | float | ✅ | Risk:reward ratio. Must be positive. TP = entry ± (distance × rr). |
 | 4 | `risk` | float **or** `$float` | ✅ | **Percent mode:** `0.5` = risk 0.5% of account balance. **Dollar mode:** `$50` = risk exactly $50 (percent is ignored). Must be positive. |
 | 5 | `account` | string | ✅ | Account shortcode (e.g. `5k`, `10k`, `raven`, `demo`, `live100k`). Must exist in `CTRADER_ACCOUNTS`. |
-| 6 | `tf` | string | ⬜ | Optional CC-guard timeframe. Must be one of: `M1 M5 M15 M30 H1 H4 D1 W1 MN1`. |
-| 7 | `guard_price` | float | ⬜ | Optional CC-guard price. Only valid if `tf` is also given. |
+| 6 | `--smart-sl <price> <tf>` | float + tf | ⬜ | Soft candle-close stop. `<tf>` must be one of `M1 M5 M15 M30 H1`. |
 
 **Parameter variations:**
 
 - **Risk as percent:** `/m 2440.00 y 2 0.5 10k`
 - **Risk as dollar amount:** `/m 2440.00 y 2 $50 10k`
-- **With CC guard:** `/m 2440.00 y 2 0.5 10k M15 4080`
+- **With soft stop:** `/m 2440.00 y 2 0.5 10k --smart-sl 2435 M5`
 - **Without widen:** `/m 2440.00 n 2 0.5 10k`
 
 **Examples:**
 ```
 /m 2440.00 y 2 0.5 10k
 /m 2440.00 y 2 $50 10k
-/m 2440.00 y 2 0.5 10k M15 4080
+/m 2440.00 y 2 0.5 10k --smart-sl 2435 M5
 /m 2440.00 n 3 1 5k
 ```
 
@@ -68,7 +67,7 @@ Places a **market** order (fills at the live bid/ask). Direction is inferred aut
 - Places the order with SL/TP and label `crackedalert`.
 - **`--smart-sl <price> <tf>`** (soft candle-close stop): does NOT move the broker-side SL. Arms a guard that closes the position when a `<tf>` candle CLOSES past `<price>` (BUY: below, SELL: above). `<tf>` must be one of `M1 M5 M15 M30 H1`. `<price>` must sit between the fill and the original SL. Lots stay anchored to the original SL; the reply reports the estimated exposure at the smart level.
 - SL/TP are real broker-side orders -- results (fills, TP/SL hits) are visible in the cTrader app.
-- If a CC guard (`tf` + `guard_price`) is given, creates a candle-close guard that auto-closes the position when a candle closes past the guard price.
+- To attach a soft stop to an **already-open** position, use `/guard`.
 
 **Error cases:**
 - `error: account '<acct>' not found.` — unknown account shortcode.
@@ -88,7 +87,7 @@ Places a **pending** order (limit or stop) at an explicit entry price. The place
 
 **Syntax:**
 ```
-/p <entry> <sl> <widen:y|n> <rr> <risk%|$amount> <account> [<tf> <guard_price>]
+/p <entry> <sl> <widen:y|n> <rr> <risk%|$amount> <account> [--smart-sl <price> <tf>]
 ```
 
 **Parameters:**
@@ -101,14 +100,12 @@ Places a **pending** order (limit or stop) at an explicit entry price. The place
 | 4 | `rr` | float | ✅ | Risk:reward ratio. Must be positive. |
 | 5 | `risk` | float **or** `$float` | ✅ | Percent or dollar risk (same as `/m`). |
 | 6 | `account` | string | ✅ | Account shortcode. |
-| 7 | `tf` | string | ⬜ | Optional CC-guard timeframe. |
-| 8 | `guard_price` | float | ⬜ | Optional CC-guard price. |
+| 7 | `--smart-sl <price> <tf>` | float + tf | ⬜ | Soft candle-close stop. `<tf>` must be one of `M1 M5 M15 M30 H1`. |
 
 **Parameter variations:**
 
 - **Risk as percent:** `/p 2450.00 2455.00 n 3 1 5k`
 - **Risk as dollar amount:** `/p 2450.00 2455.00 n 3 $100 5k`
-- **With CC guard:** `/p 2450.00 2455.00 n 3 1 5k H1 2445`
 - **With soft candle-close stop:** `/p 2450.00 2455.00 n 3 1 5k --smart-sl 2451.25 M15`
 - **Without widen:** `/p 2450.00 2455.00 n 3 1 5k`
 
@@ -116,7 +113,7 @@ Places a **pending** order (limit or stop) at an explicit entry price. The place
 ```
 /p 2450.00 2455.00 n 3 1 5k
 /p 2450.00 2455.00 n 3 $100 5k
-/p 2450.00 2455.00 n 3 1 5k H1 2445
+/p 2450.00 2455.00 n 3 1 5k --smart-sl 2451.25 M15
 /p 2450.00 2455.00 y 2 0.5 10k
 ```
 
@@ -126,7 +123,7 @@ Places a **pending** order (limit or stop) at an explicit entry price. The place
 - Infers LIMIT or STOP order type.
 - SL/TP/dist/lots are computed off the **placement price** (the actual fill), not the raw entry.
 - Places the order with `GOOD_TILL_CANCEL` time-in-force.
-- On success with a CC guard or `--smart-sl` requested, replies with a "CC guard queued" message — the guard activates automatically when the order fills.
+- On success with `--smart-sl` requested, replies with a "CC guard queued" message — the guard activates automatically when the order fills.
 
 **Error cases:** Same as `/m`.
 
@@ -567,12 +564,13 @@ Removes the calling chat from the dynamic allow-list. **Not gated** — anyone c
 Since v2.0.31 the bot no longer generates internal trade alerts (`entry`/`tp`/`sl`). Fills and TP/SL executions arrive as cTrader push events; results are visible in the cTrader app. Broker-side SL/TP on every order are unaffected.
 
 **CC guards** (candle-close position auto-close) remain fully supported:
-- Created immediately for `/m` used with a `tf` + `guard_price`.
+- Created immediately for `/m` used with `--smart-sl <price> <tf>`.
 - Queued for `/p` orders and activated automatically when the order fills.
 - BUY positions: guard fires if a candle closes **below** the guard price.
 - SELL positions: guard fires if a candle closes **above** the guard price.
 - On fire, the position is auto-closed and all subscribers are notified.
 - If the position is already gone (SL/TP hit), the guard is removed with a notice.
+- For an **already-open** position, attach one with `/guard <position_id> <price> <tf> [--all]`.
 
 ---|---|---|
 | `entry` | Entry price is hit | Confirms the position exists, then creates TP + SL alerts. Broadcast to all subscribers. |
@@ -580,7 +578,7 @@ Since v2.0.31 the bot no longer generates internal trade alerts (`entry`/`tp`/`s
 | `sl` | Stop-loss price is hit | Broadcast to all subscribers, then deleted. |
 
 **CC guards** (candle-close position auto-close):
-- Created automatically when `/m` is used with a `tf` + `guard_price`.
+- Created automatically when `/m` is used with `--smart-sl <price> <tf>`.
 - Queued for `/p` orders and activated when the order fills.
 - BUY positions: guard fires if a candle closes **below** the guard price.
 - SELL positions: guard fires if a candle closes **above** the guard price.
@@ -764,8 +762,8 @@ python -m pytest tests/test_trading.py -v
 
 | Command | Syntax | Purpose |
 |---|---|---|
-| `/m` | `/m <sl> <widen> <rr> <risk> <account> [tf guard]` | Market order |
-| `/p` | `/p <entry> <sl> <widen> <rr> <risk> <account> [tf guard]` | Pending order |
+| `/m` | `/m <sl> <widen> <rr> <risk> <account> [--smart-sl <price> <tf>]` | Market order |
+| `/p` | `/p <entry> <sl> <widen> <rr> <risk> <account> [--smart-sl <price> <tf>]` | Pending order |
 | `/be` | `/be <account>` | Move SL to breakeven |
 | `/close` | `/close <id> <account>` | Close one position |
 | `/close_all` | `/close_all <account>` | Close all positions |

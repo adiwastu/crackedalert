@@ -70,12 +70,11 @@ class TradingViewImportContractTest(unittest.TestCase):
         self.assertNotIn("refreshAlert", self.tv)
 
     def test_prefills_present(self) -> None:
-        # RR derived from the drawing, risk% from the clip, candle TF
-        # prefilled for the CC guard.
+        # RR derived from the drawing, risk% from the clip.
         self.assertIn("setSelect('tv-rr'", self.tv)
         self.assertIn("sources.0.source.state.risk", self.tv)
         self.assertIn("Bot TP at RR", self.tv)
-        self.assertIn("tv-cc-tf", self.tv)
+        self.assertNotIn("tv-cc-on", self.tv)   # positional pair removed
 
 
 class FrontendContractTest(unittest.TestCase):

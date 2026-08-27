@@ -124,12 +124,13 @@ class TradeParsing(unittest.TestCase):
             (t.sl, t.widen, t.rr, t.risk_pct, t.account),
             (2455.0, False, 3.0, 1.0, "5k"))
 
-    def test_trade_broadcast_with_cc_guard(self):
-        t = handlers.parse_trade("/m 2440 y 2 0.5 10k M15 4080 --all",
-                                 is_market=True)
+    def test_trade_broadcast_with_smart_sl(self):
+        t = handlers.parse_trade(
+            "/m 2440 y 2 0.5 10k --smart-sl 2435 M5 --all",
+            is_market=True)
         self.assertTrue(t.broadcast)
-        self.assertEqual(t.cc_timeframe, "M15")
-        self.assertEqual(t.cc_price, 4080.0)
+        self.assertEqual(t.smart_sl, 2435.0)
+        self.assertEqual(t.smart_sl_tf, "M5")
 
     def test_trade_no_broadcast_default(self):
         t = handlers.parse_trade("/m 2440 y 2 0.5 10k", is_market=True)
@@ -140,7 +141,17 @@ class TradeParsing(unittest.TestCase):
             "/m 2440 n 2 0.5 10k --smart-sl 2445.5 M5", is_market=True)
         self.assertEqual(t.smart_sl, 2445.5)
         self.assertEqual(t.smart_sl_tf, "M5")
-        self.assertIsNone(t.cc_timeframe)
+
+    def test_trade_rejects_positional_cc_guard_pair(self):
+        # The positional <tf> <guard_price> pair was removed: --smart-sl is
+        # the only guard syntax on /m and /p.
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k M15 4080",
+                                 is_market=True)
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m 2440 y 2 0.5 10k --smart-sl 2435 M5 4080",
+                is_market=True)
 
     def test_smart_sl_short_flag_and_lowercase_tf(self):
         t = handlers.parse_trade(
@@ -212,7 +223,6 @@ class TradeParsing(unittest.TestCase):
                                  is_market=True)
         self.assertAlmostEqual(t.smart_sl, 2435.0)
         self.assertEqual(t.smart_sl_tf, "M5")
-        self.assertIsNone(t.cc_timeframe)
 
     def test_pending_smart_sl(self):
         t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k --smart-sl 2445 H1",
@@ -261,58 +271,26 @@ class TradeParsing(unittest.TestCase):
                                  is_market=True)
 
     def test_old_xmult_is_rejected(self):
-        # x2-style smart multiplier is no longer a valid trailing token; a
-        # bare trailing value that's not --smart-sl falls through to the CC
-        # guard parser and errors.
+        # x2-style smart multiplier is no longer a valid trailing token.
         with self.assertRaises(handlers.ParseError):
             handlers.parse_trade("/m 2440 y 2 0.5 10k x2", is_market=True)
 
-    def test_market_with_cc_guard(self):
-        t = handlers.parse_trade("/m 2440 y 2 0.5 10k M15 4080",
-                                 is_market=True)
-        self.assertEqual(t.cc_timeframe, "M15")
-        self.assertEqual(t.cc_price, 4080.0)
-
-    def test_market_without_cc_guard(self):
-        t = handlers.parse_trade("/m 2440 y 2 0.5 10k", is_market=True)
-        self.assertIsNone(t.cc_timeframe)
-        self.assertIsNone(t.cc_price)
-
-    def test_pending_with_cc_guard(self):
-        t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k H1 2445",
-                                 is_market=False)
-        self.assertEqual(t.cc_timeframe, "H1")
-        self.assertEqual(t.cc_price, 2445.0)
-
-    def test_pending_without_cc_guard(self):
-        t = handlers.parse_trade("/p 2450 2440 y 2 0.5 10k",
-                                 is_market=False)
-        self.assertIsNone(t.cc_timeframe)
-        self.assertIsNone(t.cc_price)
-
-    def test_market_bad_cc_timeframe_raises(self):
-        with self.assertRaises(handlers.ParseError):
-            handlers.parse_trade("/m 2440 y 2 0.5 10k X99 4080",
-                                 is_market=True)
-
-    def test_pending_bad_cc_timeframe_raises(self):
-        with self.assertRaises(handlers.ParseError):
-            handlers.parse_trade("/p 2450 2440 y 2 0.5 10k X99 2445",
-                                 is_market=False)
-
-    def test_market_cc_price_not_number_raises(self):
-        with self.assertRaises(handlers.ParseError):
-            handlers.parse_trade("/m 2440 y 2 0.5 10k M15 abc",
-                                 is_market=True)
-
-    def test_market_only_one_cc_arg_raises(self):
-        with self.assertRaises(handlers.ParseError):
-            handlers.parse_trade("/m 2440 y 2 0.5 10k M15", is_market=True)
-
-    def test_pending_only_one_cc_arg_raises(self):
-        with self.assertRaises(handlers.ParseError):
-            handlers.parse_trade("/p 2450 2440 y 2 0.5 10k H1",
-                                 is_market=False)
+    def test_positional_cc_guard_pair_rejected(self):
+        # The positional <tf> <guard_price> pair was removed from /m and
+        # /p; --smart-sl (or /guard for existing positions) is the only
+        # candle-close guard syntax now.
+        for text in [
+            "/m 2440 y 2 0.5 10k M15 4080",
+            "/p 2450 2440 y 2 0.5 10k H1 2445",
+            "/m 2440 y 2 0.5 10k M15",
+            "/p 2450 2440 y 2 0.5 10k H1",
+            "/m 2440 y 2 0.5 10k X99 4080",
+            "/p 2450 2440 y 2 0.5 10k X99 2445",
+            "/m 2440 y 2 0.5 10k M15 abc",
+        ]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_trade(
+                    text, is_market=text.startswith("/m"))
 
 
 class CandleAlertParsing(unittest.TestCase):
