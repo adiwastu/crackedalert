@@ -114,6 +114,22 @@ class FrontendContractTest(unittest.TestCase):
         # use); the UI must not link to /tv.html anymore.
         self.assertNotIn("tv.html", self.ui)
 
+    def test_cancel_condition_field_present(self) -> None:
+        # v2.0.57: the pending-order builder exposes the --cancel condition
+        # (cancel the unfilled order if price touches the level pre-fill).
+        self.assertIn('id="cancel-price"', self.ui)
+        self.assertIn("Cancel if hits", self.ui)
+
+    def test_cancel_condition_flag_emitted_on_pending(self) -> None:
+        # Only the /p branch emits --cancel (market orders reject it), and
+        # only when the user typed a level.
+        self.assertIn("base.push('--cancel',cc)", self.ui)
+        self.assertIn("const cc=$('cancel-price').value", self.ui)
+
+    def test_cancel_condition_in_readout(self) -> None:
+        self.assertIn("cancel if price hits ", self.ui)
+        self.assertIn("S.orderType==='pending'&&!isNaN(cc)", self.ui)
+
 
 if __name__ == "__main__":
     unittest.main()

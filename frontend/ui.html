@@ -63,6 +63,8 @@ function ordCmd(){
   }else{
     if(!entry)return null;
     base=['/p',entry,sl,widen,S.rr,S.risk,S.acct];
+    const cc=$('cancel-price').value;
+    if(cc)base.push('--cancel',cc);
   }
   const ss=$('smart-sl').value;
   if(ss)base.push('--smart-sl',ss,$('smart-tf').value);
@@ -71,6 +73,7 @@ function ordCmd(){
 function ordReadout(){
   const sl=parseFloat($('sl').value), entry=parseFloat($('inp-entry').value);
   const ss=parseFloat($('smart-sl').value);
+  const cc=parseFloat($('cancel-price').value);
   const tf=$('smart-tf').value;
   const ro=$('trade-readout');
   let txt='';
@@ -82,6 +85,9 @@ function ordReadout(){
       txt='Risk at smart SL depends on the live fill (bot reports it)';
     }
     txt+=' \u2014 closes the position when a '+tf+' candle CLOSES past '+ss+' (BUY: below / SELL: above). Broker-side SL stays at your original level.';
+  }
+  if(S.orderType==='pending'&&!isNaN(cc)&&cc>0){
+    txt+=(txt?' \u2014 ':'')+'cancel if price hits '+cc+' before the order fills';
   }
   ro.textContent=txt;
   $('trade-cmd').textContent=ordCmd()??'';
@@ -116,6 +122,7 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
   </div>
   <div class="row" id="entry-fld" style="display:none">
     <div><label>Entry</label><input id="inp-entry" type="number" step="0.01" placeholder="2400.00" oninput="ordReadout()"></div>
+    <div><label>Cancel if hits (optional)</label><input id="cancel-price" type="number" step="0.01" placeholder="e.g. 2490.00" oninput="ordReadout()"></div>
   </div>
   <div class="row">
     <div><label>Original SL</label><input id="sl" type="number" step="0.01" placeholder="2395.00" oninput="ordReadout()"></div>
