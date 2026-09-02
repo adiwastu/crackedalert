@@ -107,8 +107,10 @@ def trade_usage(is_market: bool) -> str:
                      "[sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price> <tf>] [--all]",
                      "/m 2440.00 y 2 0.5 10k --smart-sl 2435 M15 --all")
     return usage("/p",
-                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] [--smart-sl <price> <tf>] [--all]",
-                 "/p 2450.00 2455.00 n 3 1 5k --smart-sl 2452 H1 --all")
+                 "[entry] [sl] [widen:y/n] [rr] [risk%] [account] "
+                 "[--smart-sl <price> <tf>] [--cancel <price>] [--all]",
+                 "/p 2450.00 2455.00 n 3 1 5k --smart-sl 2452 H1 "
+                 "--cancel 2490 --all")
 
 
 def positions_usage(is_positions: bool) -> str:
@@ -127,6 +129,11 @@ def close_all_usage() -> str:
 def guard_usage() -> str:
     return usage("/guard", "[position_id] [price] [tf] [--all]",
                  "/guard 4467051 4080 H1 --all")
+
+
+def ocancel_usage() -> str:
+    return usage("/ocancel", "[order_id] [price]",
+                 "/ocancel 4467051 4612")
 
 
 def cancel_order_usage() -> str:
@@ -500,6 +507,7 @@ BOT_COMMANDS = [
     ("p", "pending order"),
     ("be", "SL to breakeven"),
     ("guard", "candle-close guard on an open position"),
+    ("ocancel", "cancel an unfilled order if price hits a level"),
     ("close", "close a position"),
     ("close_all", "close everything"),
     ("cancel_order", "cancel a pending order"),

@@ -175,6 +175,91 @@ async def _run_bot(settings: Settings) -> None:
     # broker-side with its real SL/TP -- re-attach via /ccalert).
     pending_cc: Dict[str, dict] = {}
 
+    # Pending-order cancel conditions: str(order_id) -> watch spec.
+    # Registered by handlers (/p --cancel and /ocancel); this module's
+    # tick listener cancels the order when price touches the level before
+    # the fill, and on_execution drops the watch once the order fills or
+    # is cancelled. In-memory: a restart drops watches (re-arm with
+    # /ocancel), like the pending_cc registry.
+    order_cancel_watch: Dict[str, dict] = {}
+
+    async def watch_subscribe(shortcode: str, symbol: str):
+        """Ensure ticks stream for the order's account/symbol so the
+        cancel-condition listener can see price action. Returns the
+        resolved SymbolInfo, or None when the account/env is unknown."""
+        acc = settings.accounts.get(shortcode)
+        if acc is None:
+            return None
+        market = markets.get(acc.environment)
+        if market is None:
+            return None
+        info = await market.ensure_symbol(acc.ctid_account_id, symbol)
+        await market.subscribe(acc.ctid_account_id, info.symbol_id)
+        return info
+
+    def _cancel_watch_gone(message: str) -> bool:
+        """True when a failed cancel response means the order itself is no
+        longer open (already filled/cancelled/rejected elsewhere), so the
+        watch should die instead of retrying against a dead order."""
+        m = str(message).lower()
+        for token in ("not found", "does not exist", "no longer",
+                      "already", "filled", "cancelled", "canceled",
+                      "rejected", "expired", "not open"):
+            if token in m:
+                return True
+        return False
+
+    async def on_tick_cancel(account_id: int, symbol_id: int,
+                             bid: float, ask: float) -> None:
+        """Cancel unfilled orders whose cancel level price just traded.
+
+        A watch's level is hit on the first tick that trades at or beyond
+        it (bid <= level for a level below mid, ask >= level for one
+        above). Filling first wins: on_execution drops the watch when the
+        order's fill event arrives."""
+        if not order_cancel_watch:
+            return
+        mid = (bid + ask) / 2.0
+        now = time.monotonic()
+        for oid, w in list(order_cancel_watch.items()):
+            if w["account_id"] != account_id:
+                continue
+            if w.get("symbol_id") != symbol_id:
+                continue    # watch without a resolvable symbol never fires
+            if now < w.get("retry_after", 0):
+                continue
+            level = w["level"]
+            hit = (level < mid and bid <= level) or \
+                  (level >= mid and ask >= level)
+            if not hit:
+                continue
+            try:
+                await clients[w["env"]].request(ct.PT_CANCEL_ORDER_REQ, {
+                    "ctidTraderAccountId": w["account_id"],
+                    "orderId": int(oid),
+                })
+                order_cancel_watch.pop(oid, None)
+                log.info("order %s cancelled: cancel condition %.2f hit",
+                         oid, level)
+                await notify(
+                    w["chat_id"],
+                    "order %s cancelled \u2014 price hit your cancel "
+                    "level %.2f before the fill." % (oid, level))
+            except Exception as e:
+                if _cancel_watch_gone(str(e)):
+                    order_cancel_watch.pop(oid, None)
+                    log.info("cancel watch %s dropped: order is gone (%s)",
+                             oid, e)
+                    await notify(
+                        w["chat_id"],
+                        "order %s is no longer open (filled or cancelled "
+                        "already) \u2014 nothing to do for the cancel "
+                        "condition at %.2f." % (oid, level))
+                else:
+                    log.warning("cancel condition %s hit but cancel "
+                                "failed: %s -- retrying later", oid, e)
+                    w["retry_after"] = time.monotonic() + 10
+
     async def broadcast(text: str) -> None:
         """Send a message to every subscriber (auto trade alerts)."""
         active_alert.set(text)
@@ -221,6 +306,12 @@ async def _run_bot(settings: Settings) -> None:
             position_id = order.get("positionId")
         if order_id is not None:
             _materialize_pending_cc(order_id, position_id)
+        if order_id is not None and position_id is not None:
+            # A fill event for this order means it is no longer pending:
+            # the fill won, so drop any cancel-condition watch on it.
+            if order_cancel_watch.pop(str(order_id), None) is not None:
+                log.info("order %s filled: cancel-condition watch dropped",
+                         order_id)
         if position_id is not None \
                 and _execution_closes_position(order, position):
             try:
@@ -241,6 +332,10 @@ async def _run_bot(settings: Settings) -> None:
     feed = FeedService(markets[feed_account.environment],
                        feed_account.ctid_account_id, engine)
     markets[feed_account.environment].add_tick_listener(feed.on_tick)
+    # Cancel-condition watcher: listens on every env's spot stream (the
+    # watcher itself routes by account/symbol, so one shared listener).
+    for mkt in markets.values():
+        mkt.add_tick_listener(on_tick_cancel)
 
     async def on_cc_close(alert) -> None:
         try:
@@ -288,6 +383,21 @@ async def _run_bot(settings: Settings) -> None:
                                          store.active_symbols())
                 for sym, tf in candle_store.active_keys():
                     candle_feed.add_symbol(sym, tf)
+            # Server-side spot subscriptions are gone after a reconnect:
+            # re-arm streams for symbols with live cancel-condition
+            # watches on this environment's accounts.
+            mkt = markets[env]
+            for oid, w in list(order_cancel_watch.items()):
+                if w.get("env") != env:
+                    continue
+                try:
+                    info = await mkt.ensure_symbol(
+                        w["account_id"], w["symbol"])
+                    await mkt.subscribe(w["account_id"], info.symbol_id)
+                    w["symbol_id"] = info.symbol_id
+                except Exception as e:
+                    log.warning("resubscribe cancel watch %s (%s) "
+                                "failed: %s", oid, w.get("symbol"), e)
         return on_connected
 
     for env, cli in clients.items():
@@ -298,6 +408,8 @@ async def _run_bot(settings: Settings) -> None:
                         candle_feed=candle_feed,
                         subscription_store=subscription_store,
                         pending_cc=pending_cc,
+                        cancel_watch=order_cancel_watch,
+                        watch_subscribe=watch_subscribe,
                         imbalance_checker=lambda: imbalance_verdict())
     handlers.register(app)
 

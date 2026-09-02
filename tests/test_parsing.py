@@ -293,6 +293,171 @@ class TradeParsing(unittest.TestCase):
                     text, is_market=text.startswith("/m"))
 
 
+class NamedFlagTradeParsing(unittest.TestCase):
+    """v2.0.55: full named-flag mode for /m and /p -- first token starts
+    with '-', every parameter given by name, in any order."""
+
+    def test_flag_mode_pending_full(self):
+        t = handlers.parse_trade(
+            "/p --entry 2450 --sl 2455 --widen n --rr 3 --risk 1 "
+            "--account 5k", is_market=False)
+        self.assertEqual(t.entry, 2450.0)
+        self.assertEqual(
+            (t.sl, t.widen, t.rr, t.risk_pct, t.account),
+            (2455.0, False, 3.0, 1.0, "5k"))
+
+    def test_flag_mode_market_full(self):
+        t = handlers.parse_trade(
+            "/m --sl 2440 --rr 2 --risk 0.5 --account 10k --widen y",
+            is_market=True)
+        self.assertIsNone(t.entry)
+        self.assertEqual(
+            (t.sl, t.widen, t.rr, t.risk_pct, t.account),
+            (2440.0, True, 2.0, 0.5, "10k"))
+
+    def test_flag_mode_aliases(self):
+        t = handlers.parse_trade(
+            "/p -e 2450 --stop 2455 -w n --risk-reward 3 --risk 1 "
+            "--acct 5k", is_market=False)
+        self.assertEqual(t.entry, 2450.0)
+        self.assertEqual(
+            (t.sl, t.widen, t.rr, t.risk_pct, t.account),
+            (2455.0, False, 3.0, 1.0, "5k"))
+
+    def test_flag_mode_widen_defaults_n(self):
+        t = handlers.parse_trade(
+            "/p --entry 2450 --sl 2455 --rr 3 --risk 1 --account 5k",
+            is_market=False)
+        self.assertFalse(t.widen)
+
+    def test_flag_mode_any_order(self):
+        t = handlers.parse_trade(
+            "/p --risk 1 --account 5k --rr 3 --entry 2450 --sl 2455",
+            is_market=False)
+        self.assertEqual(
+            (t.entry, t.sl, t.rr, t.risk_pct, t.account),
+            (2450.0, 2455.0, 3.0, 1.0, "5k"))
+
+    def test_flag_mode_dollar_risk(self):
+        t = handlers.parse_trade(
+            "/p --entry 2450 --sl 2455 --rr 3 --risk $50 --account 5k",
+            is_market=False)
+        self.assertEqual(t.risk_usd, 50.0)
+        self.assertEqual(t.risk_pct, 0.0)
+
+    def test_flag_mode_missing_required(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/p --entry 2450 --rr 3 --risk 1 --account 5k",
+                is_market=False)
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m --sl 2440 --rr 2 --risk 0.5", is_market=True)
+
+    def test_flag_mode_missing_pending_entry(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/p --sl 2455 --rr 3 --risk 1 --account 5k",
+                is_market=False)
+
+    def test_flag_mode_entry_rejected_on_market(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m --entry 2450 --sl 2455 --rr 3 --risk 1 --account 5k",
+                is_market=True)
+
+    def test_flag_mode_unknown_option(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m --sl 2440 --rr 2 --risk 0.5 --account 10k "
+                "--frobnicate x", is_market=True)
+
+    def test_flag_mode_smart_sl(self):
+        t = handlers.parse_trade(
+            "/p --entry 2450 --sl 2455 --rr 3 --risk 1 --account 5k "
+            "--smart-sl 2448 M15", is_market=False)
+        self.assertEqual((t.smart_sl, t.smart_sl_tf), (2448.0, "M15"))
+
+    def test_flag_mode_broadcast_anywhere(self):
+        t = handlers.parse_trade(
+            "/p --all --entry 2450 --sl 2455 --rr 3 --risk 1 --account 5k",
+            is_market=False)
+        self.assertTrue(t.broadcast)
+        self.assertEqual(t.entry, 2450.0)
+
+
+class CancelConditionParsing(unittest.TestCase):
+    """v2.0.55: --cancel <price> on /p and the /ocancel command."""
+
+    def test_pending_cancel_condition(self):
+        t = handlers.parse_trade(
+            "/p 2450 2455 n 3 1 5k --cancel 2490", is_market=False)
+        self.assertEqual(t.cancel_price, 2490.0)
+        self.assertIsNone(t.smart_sl)
+
+    def test_pending_cancel_with_smart_sl_and_all(self):
+        t = handlers.parse_trade(
+            "/p 2450 2455 n 3 1 5k --cancel 2490 --smart-sl 2448 M5 --all",
+            is_market=False)
+        self.assertEqual(t.cancel_price, 2490.0)
+        self.assertEqual((t.smart_sl, t.smart_sl_tf), (2448.0, "M5"))
+        self.assertTrue(t.broadcast)
+
+    def test_pending_cancel_any_order_in_rest(self):
+        t = handlers.parse_trade(
+            "/p 2450 2455 n 3 1 5k --smart-sl 2448 M5 --cancel 2490",
+            is_market=False)
+        self.assertEqual(t.cancel_price, 2490.0)
+        self.assertEqual((t.smart_sl, t.smart_sl_tf), (2448.0, "M5"))
+
+    def test_flag_mode_cancel_condition(self):
+        t = handlers.parse_trade(
+            "/p --entry 2450 --sl 2455 --rr 3 --risk 1 --account 5k "
+            "--cancel 2490", is_market=False)
+        self.assertEqual(t.cancel_price, 2490.0)
+        self.assertEqual(t.entry, 2450.0)
+
+    def test_no_cancel_condition_by_default(self):
+        t = handlers.parse_trade("/p 2450 2455 n 3 1 5k", is_market=False)
+        self.assertIsNone(t.cancel_price)
+
+    def test_market_cancel_condition_rejected(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/m 2440 y 2 0.5 10k --cancel 2000",
+                                 is_market=True)
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/m --sl 2440 --rr 2 --risk 0.5 --account 10k "
+                "--cancel 2000", is_market=True)
+
+    def test_cancel_missing_price(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/p 2450 2455 n 3 1 5k --cancel",
+                                 is_market=False)
+
+    def test_cancel_bad_number(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade("/p 2450 2455 n 3 1 5k --cancel abc",
+                                 is_market=False)
+
+    def test_cancel_trailing_garbage_rejected(self):
+        with self.assertRaises(handlers.ParseError):
+            handlers.parse_trade(
+                "/p 2450 2455 n 3 1 5k --cancel 2490 extra",
+                is_market=False)
+
+    def test_ocancel_valid(self):
+        self.assertEqual(handlers.parse_ocancel("/ocancel 4467051 4612"),
+                         (4467051, 4612.0))
+
+    def test_ocancel_invalid(self):
+        for text in ["/ocancel", "/ocancel 4467051",
+                     "/ocancel abc 4612", "/ocancel 4467051 abc",
+                     "/ocancel 4467051 4612 extra"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_ocancel(text)
+
+
 class CandleAlertParsing(unittest.TestCase):
     def test_full(self):
         a = handlers.parse_cc_alert(

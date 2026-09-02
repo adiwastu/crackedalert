@@ -54,7 +54,215 @@ class TradeArgs:
     risk_usd: Optional[float] = None   # dollar amount, $ prefix; else pct
     smart_sl: Optional[float] = None      # soft candle-close stop level
     smart_sl_tf: Optional[str] = None     # its timeframe (required with smart_sl)
+    cancel_price: Optional[float] = None  # /p: cancel if price touches this pre-fill
     broadcast: bool = False
+
+
+# Named-flag aliases for the positional trade parameters.
+_TRADE_FLAG_NAMES = {
+    "--entry": "entry", "-e": "entry",
+    "--sl": "sl", "--stop": "sl",
+    "--widen": "widen", "-w": "widen",
+    "--rr": "rr", "--risk-reward": "rr",
+    "--risk": "risk",
+    "--account": "account", "--acct": "account",
+}
+_BROADCAST_FLAGS = ("--all", "-all", "--broadcast", "-a")
+
+
+def parse_trade(text: str, is_market: bool) -> TradeArgs:
+    """/m <sl> <widen> <rr> <risk%> <account> [--smart-sl <price> <tf>] [--all]
+       /p <entry> <sl> <widen> <rr> <risk%> <account> [--smart-sl <price> <tf>] [--cancel <price>] [--all]
+    Named-flag mode (first option starts with '-'): any /m or /p parameter
+    by name, e.g.
+       /p --entry 2450 --sl 2455 --widen n --rr 3 --risk 1 --account 5k
+         [--smart-sl <price> <tf>] [--cancel <price>] [--all]
+    --smart-sl <price> <tf> arms a SOFT candle-close stop (see /m docs).
+    --cancel <price> (pending orders only) sets a CANCEL CONDITION: if
+    price touches <price> before the order fills, the order is cancelled.
+    """
+    tokens = text.split()[1:]
+    broadcast = False
+    kept = []
+    for tok in tokens:
+        if tok.lower() in _BROADCAST_FLAGS:
+            broadcast = True
+        else:
+            kept.append(tok)
+    tokens = kept
+    if not tokens:
+        raise ParseError(
+            "expected %s arguments" % ("6" if is_market else "7"))
+    if tokens[0].startswith("-"):
+        return _parse_trade_flags(tokens, is_market, broadcast)
+    return _parse_trade_positional(tokens, is_market, broadcast)
+
+
+def _parse_trade_positional(tokens, is_market: bool,
+                            broadcast: bool) -> TradeArgs:
+    base = 5 if is_market else 6
+    if len(tokens) < base:
+        raise ParseError(
+            "expected %d arguments (or %d with --smart-sl <price> <tf>), "
+            "got %d" % (base, base + 3, len(tokens)))
+    try:
+        if is_market:
+            entry = None
+            sl_raw, widen_raw, rr_raw, risk_raw, account = (
+                tokens[0], tokens[1], tokens[2], tokens[3], tokens[4])
+        else:
+            entry = float(tokens[0])
+            sl_raw, widen_raw, rr_raw, risk_raw, account = (
+                tokens[1], tokens[2], tokens[3], tokens[4], tokens[5])
+    except ValueError:
+        raise ParseError("numeric argument is not a number")
+
+    rest = tokens[base:]
+    smart_sl = None
+    smart_sl_tf = None
+    cancel_price = None
+    i = 0
+    while i < len(rest):
+        low = rest[i].lower()
+        if low in ("--smart-sl", "-ss", "--smartsl"):
+            if i + 2 >= len(rest):
+                raise ParseError(
+                    "expected a price AND a timeframe after --smart-sl "
+                    "(e.g. --smart-sl 4613.23 M5)")
+            try:
+                smart_sl = float(rest[i + 1])
+            except ValueError:
+                raise ParseError("smart SL price is not a number")
+            smart_sl_tf = rest[i + 2].upper()
+            if smart_sl_tf not in candles_mod.SMART_SL_TIMEFRAMES:
+                raise ParseError(
+                    "smart SL timeframe '%s' is not valid. Use: %s"
+                    % (smart_sl_tf,
+                       " ".join(candles_mod.SMART_SL_TIMEFRAMES)))
+            i += 3
+        elif low == "--cancel":
+            if i + 1 >= len(rest):
+                raise ParseError("expected a price after --cancel")
+            try:
+                cancel_price = float(rest[i + 1])
+            except ValueError:
+                raise ParseError("cancel price is not a number")
+            i += 2
+        else:
+            raise ParseError("unexpected argument '%s'" % rest[i])
+    return _finalize_trade_args(
+        entry=entry, sl_raw=sl_raw, widen_raw=widen_raw, rr_raw=rr_raw,
+        risk_raw=risk_raw, account=account, smart_sl=smart_sl,
+        smart_sl_tf=smart_sl_tf, cancel_price=cancel_price,
+        broadcast=broadcast, is_market=is_market)
+
+
+def _parse_trade_flags(tokens, is_market: bool,
+                       broadcast: bool) -> TradeArgs:
+    vals = {}
+    smart_sl = None
+    smart_sl_tf = None
+    cancel_price = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        low = tok.lower()
+        if low in ("--smart-sl", "-ss", "--smartsl"):
+            if i + 2 >= len(tokens):
+                raise ParseError(
+                    "expected a price AND a timeframe after --smart-sl "
+                    "(e.g. --smart-sl 4613.23 M5)")
+            try:
+                smart_sl = float(tokens[i + 1])
+            except ValueError:
+                raise ParseError("smart SL price is not a number")
+            smart_sl_tf = tokens[i + 2].upper()
+            if smart_sl_tf not in candles_mod.SMART_SL_TIMEFRAMES:
+                raise ParseError(
+                    "smart SL timeframe '%s' is not valid. Use: %s"
+                    % (smart_sl_tf,
+                       " ".join(candles_mod.SMART_SL_TIMEFRAMES)))
+            i += 3
+        elif low == "--cancel":
+            if i + 1 >= len(tokens):
+                raise ParseError("expected a price after --cancel")
+            try:
+                cancel_price = float(tokens[i + 1])
+            except ValueError:
+                raise ParseError("cancel price is not a number")
+            i += 2
+        elif low in _TRADE_FLAG_NAMES:
+            name = _TRADE_FLAG_NAMES[low]
+            if i + 1 >= len(tokens):
+                raise ParseError("expected a value after %s" % tok)
+            vals[name] = tokens[i + 1]
+            i += 2
+        else:
+            raise ParseError("unknown option '%s'" % tok)
+
+    entry_raw = vals.get("entry")
+    if is_market and entry_raw is not None:
+        raise ParseError("--entry is only valid for pending orders (/p)")
+    entry = float(entry_raw) if entry_raw is not None else None
+    if not is_market and entry is None:
+        raise ParseError("missing --entry (pending order needs an entry)")
+
+    sl_raw = vals.get("sl")
+    rr_raw = vals.get("rr")
+    risk_raw = vals.get("risk")
+    account = vals.get("account")
+    missing = [name for name, val in
+               (("--sl", sl_raw), ("--rr", rr_raw),
+                ("--risk", risk_raw), ("--account", account))
+               if val is None]
+    if missing:
+        raise ParseError("missing option(s): %s" % ", ".join(missing))
+    widen_raw = vals.get("widen", "n")
+    return _finalize_trade_args(
+        entry=entry, sl_raw=sl_raw, widen_raw=widen_raw, rr_raw=rr_raw,
+        risk_raw=risk_raw, account=account, smart_sl=smart_sl,
+        smart_sl_tf=smart_sl_tf, cancel_price=cancel_price,
+        broadcast=broadcast, is_market=is_market)
+
+
+def _finalize_trade_args(entry, sl_raw, widen_raw, rr_raw, risk_raw,
+                         account, smart_sl, smart_sl_tf, cancel_price,
+                         broadcast, is_market: bool) -> TradeArgs:
+    try:
+        sl = float(sl_raw)
+        rr = float(rr_raw)
+    except (TypeError, ValueError):
+        raise ParseError("numeric argument is not a number")
+    if widen_raw.lower() not in ("y", "n"):
+        raise ParseError("widen must be y or n")
+    if rr <= 0:
+        raise ParseError("rr and risk%% must be positive")
+    if is_market and cancel_price is not None:
+        raise ParseError("--cancel is only valid for pending orders (/p)")
+
+    # Risk: "$50" means a dollar amount, "0.5" means a percentage.
+    risk_usd = None
+    risk_pct = 0.0
+    if str(risk_raw).startswith("$"):
+        try:
+            risk_usd = float(str(risk_raw)[1:])
+        except ValueError:
+            raise ParseError("numeric argument is not a number")
+        if risk_usd <= 0:
+            raise ParseError("risk amount must be positive")
+    else:
+        try:
+            risk_pct = float(risk_raw)
+        except (TypeError, ValueError):
+            raise ParseError("numeric argument is not a number")
+        if risk_pct <= 0:
+            raise ParseError("rr and risk%% must be positive")
+
+    return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
+                     rr=rr, risk_pct=risk_pct, account=account,
+                     risk_usd=risk_usd, smart_sl=smart_sl,
+                     smart_sl_tf=smart_sl_tf, cancel_price=cancel_price,
+                     broadcast=broadcast)
 
 
 def parse_alert(text: str, default_symbol: str,
@@ -90,88 +298,25 @@ def parse_alert(text: str, default_symbol: str,
                      broadcast=broadcast)
 
 
-def parse_trade(text: str, is_market: bool) -> TradeArgs:
-    """/m <sl> <widen> <rr> <risk%> <account> [--smart-sl <price> <tf>] [--all]
-       /p <entry> <sl> <widen> <rr> <risk%> <account> [--smart-sl <price> <tf>] [--all]
-    --smart-sl <price> <tf> arms a SOFT candle-close stop: when a <tf>
-    candle CLOSES past <price> (below for longs, above for shorts), the
-    position is closed at market. The broker-side SL stays at the original
-    level and lots always anchor to it, so the risk at the smart level is
-    the stated risk% scaled by the distance ratio. <price> must sit
-    between the fill and the original SL (validated pre-placement).
+def parse_ocancel(text: str) -> tuple:
+    """/ocancel <order_id> <price>
+
+    Guards an EXISTING unfilled pending order with a cancel condition:
+    if price touches <price> before the order fills, the order is
+    cancelled at the broker.
     """
-    tokens = text.split()[1:]
-    broadcast = _pop_broadcast(tokens)
-    base = 5 if is_market else 6
-    if len(tokens) not in (base, base + 3):
-        raise ParseError(
-            "expected %d arguments (or %d with --smart-sl <price> <tf>), "
-            "got %d" % (base, base + 3, len(tokens)))
+    tokens = text.split()
+    if len(tokens) != 3:
+        raise ParseError("expected /ocancel <order_id> <price>")
     try:
-        if is_market:
-            entry = None
-            sl, widen_raw, rr_raw, risk_raw, account = (
-                float(tokens[0]), tokens[1], tokens[2], tokens[3], tokens[4])
-        else:
-            entry = float(tokens[0])
-            sl, widen_raw, rr_raw, risk_raw, account = (
-                float(tokens[1]), tokens[2], tokens[3], tokens[4], tokens[5])
-        rr = float(rr_raw)
+        order_id = int(tokens[1])
     except ValueError:
-        raise ParseError("numeric argument is not a number")
-
-    # Risk: "$50" means a dollar amount, "0.5" means a percentage.
-    risk_usd = None
-    if risk_raw.startswith("$"):
-        try:
-            risk_usd = float(risk_raw[1:])
-        except ValueError:
-            raise ParseError("numeric argument is not a number")
-        risk_pct = 0.0
-    else:
-        try:
-            risk_pct = float(risk_raw)
-        except ValueError:
-            raise ParseError("numeric argument is not a number")
-        if risk_pct <= 0:
-            raise ParseError("rr and risk%% must be positive")
-
-    if widen_raw.lower() not in ("y", "n"):
-        raise ParseError("widen must be y or n")
-    if rr <= 0:
-        raise ParseError("rr and risk%% must be positive")
-    if risk_usd is not None and risk_usd <= 0:
-        raise ParseError("risk amount must be positive")
-
-    # Optional soft candle-close stop: --smart-sl <price> <tf>.
-    rest = tokens[base:]
-    smart_sl = None
-    smart_sl_tf = None
-    if rest and rest[0].lower() in ("--smart-sl", "-ss", "--smartsl"):
-        if len(rest) < 3:
-            raise ParseError(
-                "expected a price AND a timeframe after --smart-sl "
-                "(e.g. --smart-sl 4613.23 M5)")
-        try:
-            smart_sl = float(rest[1])
-        except ValueError:
-            raise ParseError("smart SL price is not a number")
-        smart_sl_tf = rest[2].upper()
-        if smart_sl_tf not in candles_mod.SMART_SL_TIMEFRAMES:
-            raise ParseError(
-                "smart SL timeframe '%s' is not valid. Use: %s"
-                % (smart_sl_tf, " ".join(candles_mod.SMART_SL_TIMEFRAMES)))
-        rest = rest[3:]
-        if rest:
-            raise ParseError("unexpected extra arguments after --smart-sl")
-    if rest:
-        raise ParseError("unexpected trailing arguments")
-
-    return TradeArgs(entry=entry, sl=sl, widen=widen_raw.lower() == "y",
-                     rr=rr, risk_pct=risk_pct, account=account,
-                     risk_usd=risk_usd, smart_sl=smart_sl,
-                     smart_sl_tf=smart_sl_tf,
-                     broadcast=broadcast)
+        raise ParseError("order id is not a number")
+    try:
+        price = float(tokens[2])
+    except ValueError:
+        raise ParseError("cancel price is not a number")
+    return order_id, price
 
 
 def parse_guard(text: str) -> tuple:
@@ -280,7 +425,9 @@ class Handlers:
                  candle_store=None, candle_feed=None,
                  subscription_store: Optional[SubscriptionStore] = None,
                  pending_cc: Optional[dict] = None,
-                 imbalance_checker=None):
+                 imbalance_checker=None,
+                 cancel_watch: Optional[dict] = None,
+                 watch_subscribe=None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
         # candle_store: CandleAlertStore; candle_feed: CandleFeed
@@ -288,6 +435,9 @@ class Handlers:
         # pending_cc: shared dict (main.py) registering pending-order cc
         #   guard params; materialized on fill by main.on_execution
         # imbalance_checker: main.py's imbalance_verdict() for /imbalance
+        # cancel_watch: shared dict (main.py) of unfilled-order cancel
+        #   conditions; main's tick listener fires the broker cancels.
+        # watch_subscribe: main.py hook ensuring ticks flow for an account.
         self._settings = settings
         self._store = store
         self._feed = feed
@@ -298,6 +448,8 @@ class Handlers:
         self._subscriptions = subscription_store
         self._pending_cc = pending_cc
         self._imbalance_checker = imbalance_checker
+        self._cancel_watch = cancel_watch
+        self._watch_subscribe = watch_subscribe
 
     def register(self, app: Application) -> None:
         # un-gated commands
@@ -317,6 +469,7 @@ class Handlers:
         app.add_handler(CommandHandler("cancel_order", self.cancel_order))
         app.add_handler(CommandHandler("be", self.breakeven))
         app.add_handler(CommandHandler("guard", self.guard))
+        app.add_handler(CommandHandler("ocancel", self.ocancel))
         app.add_handler(CommandHandler("imbalance", self.imbalance))
         app.add_handler(CommandHandler("ccalert", self.cc_alert))
         app.add_handler(CommandHandler("cclist", self.cc_list))
@@ -641,6 +794,71 @@ class Handlers:
         await self._reply(update,
                           "position %d not found." % position_id)
 
+    async def _set_cancel_watch(self, order_id, price: float, shortcode: str,
+                                symbol: str, chat_id: int) -> bool:
+        """Register a cancel condition on an unfilled order (shared by the
+        /p --cancel flow and /ocancel). Returns False when unwired."""
+        if self._cancel_watch is None:
+            return False
+        account = self._settings.accounts.get(shortcode)
+        if account is None:
+            return False
+        spec = {
+            "level": price,
+            "env": account.environment,
+            "account_id": account.ctid_account_id,
+            "chat_id": chat_id,
+            "symbol": symbol,
+            "symbol_id": None,
+        }
+        if self._watch_subscribe is not None:
+            try:
+                info = await self._watch_subscribe(shortcode, symbol)
+                if info is not None:
+                    spec["symbol_id"] = info.symbol_id
+            except Exception as e:
+                log.warning("cancel watch subscribe failed: %s", e)
+        self._cancel_watch[str(order_id)] = spec
+        return True
+
+    async def ocancel(self, update: Update,
+                      _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Attach a cancel condition to an existing unfilled order.
+
+        If price touches <price> before the order fills, the order is
+        cancelled at the broker and the chat is notified.
+        """
+        if not self._allowed(update):
+            return
+        try:
+            order_id, price = parse_ocancel(update.effective_message.text)
+        except ParseError:
+            await self._reply(update, fmt.ocancel_usage())
+            return
+        for shortcode in self._settings.accounts:
+            try:
+                rows = await self._trader.positions_or_orders(
+                    shortcode, is_positions=False)
+            except (TradeRejected, CTraderError):
+                continue
+            for row in rows:
+                if int(row.get("id", 0) or 0) != order_id:
+                    continue
+                symbol = row.get("symbol", self._symbol)
+                if not await self._set_cancel_watch(
+                        order_id, price, shortcode, symbol,
+                        update.effective_chat.id):
+                    await self._reply(update,
+                                      "cancel watch is not wired up.")
+                    return
+                log.info("cancel condition set on order %d at %.2f",
+                         order_id, price)
+                await self._reply(update,
+                    "cancel condition set: order %d will be cancelled if "
+                    "price hits %.2f before it fills." % (order_id, price))
+                return
+        await self._reply(update, "order %d not found." % order_id)
+
     async def imbalance(self, update: Update,
                         _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Debug: run the H1 imbalance check on demand and report what the
@@ -793,6 +1011,25 @@ class Handlers:
                     "unavailable -- use /guard after the fill.")
                 return
             await self._attach_cc_guard(update, plan, args, result, is_market)
+
+        # Cancel condition on a pending order: watch price; if it touches
+        # the level before the order fills, cancel at the broker.
+        if not is_market and args.cancel_price is not None:
+            if result.order_id is None:
+                await self._reply(update,
+                    "trade placed, but the cancel condition could not be "
+                    "set (no orderId on the response).")
+            elif not await self._set_cancel_watch(
+                    result.order_id, args.cancel_price, args.account,
+                    self._symbol, update.effective_chat.id):
+                await self._reply(update,
+                    "warning: cancel condition requested but the watch "
+                    "is not wired up.")
+            else:
+                await self._reply(update,
+                    "cancel condition set: order %s will be cancelled if "
+                    "price hits %.2f before it fills."
+                    % (result.order_id, args.cancel_price))
 
     async def _attach_cc_guard(self, update: Update, plan,
                                args: TradeArgs, result,
