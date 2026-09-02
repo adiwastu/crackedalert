@@ -98,6 +98,8 @@ for raw in fh:
     line = raw.strip()
     if not line or line.startswith('#') or '=' not in line:
         continue
+    if line.startswith('export '):
+        line = line[len('export '):].strip()
     key, _, val = line.partition('=')
     if key.strip() != 'ALERT_STATUS_TOKEN':
         continue
@@ -120,6 +122,7 @@ PY
     echo "=> UI stamped with alert-status token"
 else
     echo "⚠️  ALERT_STATUS_TOKEN missing from /etc/cracked_alert/.env_cracked -- the UI will ask for the token."
+    echo "   check the key name and that there is no 'export ' / quoting mismatch."
 fi
 
 # Migrate the legacy root-domain block (hotland3x3.my.id) if it was
