@@ -163,14 +163,27 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
     <div style="flex:3"><b>Working orders</b> <span class="muted" id="orders-n"></span></div>
     <div style="flex:1"><button class="mini" onclick="loadOrders()">Refresh</button></div>
   </div>
-  <div class="hint">Unfilled limit/stop orders on the linked accounts — tap <b>copy id</b> for an id to use with <code>/ocancel</code> or <code>/cancel_order</code> in Telegram. Read-only; asks for the alert-status token once.</div>
+  <div class="hint">Unfilled limit/stop orders on the linked accounts — tap <b>copy id</b> for an id to use with <code>/ocancel</code> or <code>/cancel_order</code> in Telegram. Read-only; cancelling/closing stays in Telegram.</div>
   <div class="readout" id="orders-status"></div>
   <div id="orders-list"></div>
 </section>
 
 <script>
 // ---- Working orders (bot GET /orders, read-only) ----
-const TK='ca_token';
+// deploy_v2.sh stamps ALERT_STATUS_TOKEN over __TOKEN__ in the served
+// copy, so the page never asks for it. The prompt path only exists for
+// unstamped/local copies of this file.
+let TK='__TOKEN__';
+function ordersToken(){
+  if(TK!=='__TOKEN__')return TK;
+  TK=localStorage.getItem('ca_token')||'';
+  if(!TK){
+    TK=prompt('Alert-status token (ALERT_STATUS_TOKEN in /etc/cracked_alert/.env_cracked):');
+    if(TK)localStorage.setItem('ca_token',TK);
+  }
+  return TK;
+}
+function hasToken(){return TK!=='__TOKEN__'||!!localStorage.getItem('ca_token');}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function fmtP(v){
   if(v==null||v==='')return '\u2013';
@@ -178,16 +191,12 @@ function fmtP(v){
   return s;
 }
 function loadOrders(){
-  var t=localStorage.getItem(TK);
-  if(!t){
-    t=prompt('Alert-status token (ALERT_STATUS_TOKEN in /etc/cracked_alert/.env_cracked):');
-    if(!t)return;
-    localStorage.setItem(TK,t);
-  }
+  var t=ordersToken();
+  if(!t)return;
   var st=$('orders-status');
   st.textContent='Loading\u2026';
   fetch('/orders?token='+encodeURIComponent(t)).then(function(r){
-    if(r.status===401){localStorage.removeItem(TK);st.textContent='Bad token \u2014 tap Refresh and enter it again.';return null;}
+    if(r.status===401){localStorage.removeItem('ca_token');TK='__TOKEN__';st.textContent='Bad token \u2014 tap Refresh and enter it again.';return null;}
     if(!r.ok)throw new Error('HTTP '+r.status);
     return r.json();
   }).then(function(d){
@@ -213,8 +222,8 @@ function renderOrders(accounts){
   list.innerHTML=html;
   $('orders-n').textContent='('+total+')';
 }
-setInterval(function(){ if(localStorage.getItem(TK))loadOrders(); },30000);
-if(localStorage.getItem(TK))loadOrders();
+setInterval(function(){ if(hasToken())loadOrders(); },30000);
+if(hasToken())loadOrders();
 </script>
 
 <script>

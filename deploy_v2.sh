@@ -82,6 +82,46 @@ if [ -n "$UI_VERSION" ]; then
     echo "=> UI stamped with version $UI_VERSION"
 fi
 
+# Stamp the alert-status token into the served UI so the working-orders
+# panel can fetch /orders without asking the user to paste the token in
+# the browser. Same exposure class as the alarm APK, which already ships
+# this token on the public GitHub release link. If the env file lacks the
+# key, the page keeps its __TOKEN__ placeholder and falls back to asking.
+ALERT_TOKEN="$(python3 - <<'PY'
+import sys
+try:
+    fh = open('/etc/cracked_alert/.env_cracked', encoding='utf-8',
+              errors='ignore')
+except OSError:
+    raise SystemExit(0)
+for raw in fh:
+    line = raw.strip()
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    key, _, val = line.partition('=')
+    if key.strip() != 'ALERT_STATUS_TOKEN':
+        continue
+    val = val.strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+        val = val[1:-1]
+    print(val)
+    break
+PY
+)"
+if [ -n "$ALERT_TOKEN" ]; then
+    python3 - "$ALERT_TOKEN" <<'PY'
+import sys
+path = '/var/www/crackedalert-ui/ui.html'
+with open(path, encoding='utf-8') as fh:
+    text = fh.read()
+with open(path, 'w', encoding='utf-8') as fh:
+    fh.write(text.replace('__TOKEN__', sys.argv[1]))
+PY
+    echo "=> UI stamped with alert-status token"
+else
+    echo "⚠️  ALERT_STATUS_TOKEN missing from /etc/cracked_alert/.env_cracked -- the UI will ask for the token."
+fi
+
 # Migrate the legacy root-domain block (hotland3x3.my.id) if it was
 # previously auto-managed, so a rerun moves the site to the subdomain
 # instead of leaving a stale duplicate block behind.

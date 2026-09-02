@@ -109,6 +109,13 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn("copy('+r.id+',this)", self.ui)
         self.assertIn("function renderOrders", self.ui)
 
+    def test_token_stamp_placeholder(self) -> None:
+        # v2.0.58: deploy_v2.sh stamps ALERT_STATUS_TOKEN over __TOKEN__
+        # in the served copy, so the page never prompts for it. The repo
+        # file must keep the placeholder so stamping is possible.
+        self.assertIn("__TOKEN__", self.ui)
+        self.assertIn("function ordersToken", self.ui)
+
     def test_no_tradingview_page_reference(self) -> None:
         # The TradingView import page was deleted (too much upkeep for its
         # use); the UI must not link to /tv.html anymore.
