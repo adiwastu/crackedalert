@@ -18,7 +18,9 @@ Routes (all require the ``ALERT_STATUS_TOKEN`` as ``?token=`` or the
         -> 200 {"accounts": {<shortcode>: {"orders": [...], "error": null}}}
            Working (unfilled) orders per account for the command-builder
            UI. Each order row is what TradingService.positions_or_orders
-           returns ({id, symbol, side, volume, price, sl, tp, extra, ...}).
+           returns ({id, symbol, side, volume, price, sl, tp, extra, ...});
+           rows with an active cancel-condition watch also carry
+           cancel_level so the UI can show and amend it.
         -> 503 {"error": "orders endpoint unavailable"} (no provider wired)
         -> 500 {"error": "orders fetch failed"}         (provider raised)
         -> 401 {"error": "unauthorized"}

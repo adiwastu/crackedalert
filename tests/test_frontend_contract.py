@@ -116,6 +116,25 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn("__TOKEN__", self.ui)
         self.assertIn("function ordersToken", self.ui)
 
+    def test_ocancel_layout_present(self) -> None:
+        # v2.0.59: third builder layout -- set/amend the cancel condition
+        # on an existing unfilled order via /ocancel.
+        self.assertIn('id="form-ocancel"', self.ui)
+        self.assertIn('id="oc-btn"', self.ui)
+        self.assertIn('id="oc-id"', self.ui)
+        self.assertIn('id="oc-price"', self.ui)
+        self.assertIn("function ocancelCmd", self.ui)
+        self.assertIn("'/ocancel '", self.ui)
+        self.assertIn("function amendCancel", self.ui)
+
+    def test_orders_panel_shows_cancel_level(self) -> None:
+        # Orders rows tag active cancel-condition watches (cancel_level
+        # from GET /orders) and offer an amend shortcut into the /ocancel
+        # layout.
+        self.assertIn("cancel_level", self.ui)
+        self.assertIn("amendCancel(", self.ui)
+        self.assertIn("r.cancel_level!=null", self.ui)
+
     def test_no_tradingview_page_reference(self) -> None:
         # The TradingView import page was deleted (too much upkeep for its
         # use); the UI must not link to /tv.html anymore.

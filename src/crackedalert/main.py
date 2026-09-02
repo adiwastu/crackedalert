@@ -198,7 +198,19 @@ async def _run_bot(settings: Settings) -> None:
                         msg = str(e)
                     accounts[shortcode] = {"orders": [], "error": msg}
                 else:
-                    accounts[shortcode] = {"orders": rows, "error": None}
+                    # Tag rows that carry an active cancel-condition watch
+                    # so the UI can show/amend the level.
+                    enriched = []
+                    for r in rows:
+                        rid = r.get("id")
+                        watch = (order_cancel_watch.get(str(rid))
+                                 if rid is not None else None)
+                        if watch is not None:
+                            r = dict(r)
+                            r["cancel_level"] = watch["level"]
+                        enriched.append(r)
+                    accounts[shortcode] = {"orders": enriched,
+                                           "error": None}
             payload = {"accounts": accounts}
             cached["at"] = time.monotonic()
             cached["payload"] = payload

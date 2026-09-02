@@ -106,7 +106,12 @@ function candleCmd(){
   if(!p)return null;
   return '/ccalert '+tf+' '+p+' '+dir+' '+sym+(note?' '+note:'')+(S.candleBroadcast?' --all':'');
 }
-function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').textContent=candleCmd()??''; }
+function ocancelCmd(){
+  const oid=$('oc-id').value, price=$('oc-price').value;
+  if(!oid||!price)return null;
+  return '/ocancel '+oid+' '+price;
+}
+function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').textContent=candleCmd()??''; $('ocancel-cmd').textContent=ocancelCmd()??''; }
 </script>
 
 <section>
@@ -135,8 +140,9 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
 
 <section>
   <div class="seg" style="margin-bottom:8px">
-    <button class="active" onclick="seg(this,function(){$('form-price').style.display='';$('form-candle').style.display='none';});">Price</button>
-    <button onclick="seg(this,function(){$('form-price').style.display='none';$('form-candle').style.display='';});">Candle close</button>
+    <button class="active" onclick="seg(this,function(){$('form-price').style.display='';$('form-candle').style.display='none';$('form-ocancel').style.display='none';});">Price</button>
+    <button onclick="seg(this,function(){$('form-price').style.display='none';$('form-candle').style.display='';$('form-ocancel').style.display='none';});">Candle close</button>
+    <button id="oc-btn" onclick="seg(this,function(){$('form-price').style.display='none';$('form-candle').style.display='none';$('form-ocancel').style.display='';});">Cancel cond.</button>
   </div>
   <div id="form-price">
     <div class="row"><div><label>Price</label><input id="a-price" type="number" step="0.01" placeholder="2450.00" oninput="refresh()"></div><div><label>Notes</label><input id="a-notes" list="note-presets" placeholder="ChoCh, BoS, LTF ChoCh, LTF BoS or type your own" oninput="refresh()"></div></div>
@@ -155,6 +161,15 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
     <div class="inline"><input id="ca-all" type="checkbox" onchange="S.candleBroadcast=this.checked;refresh()"><label for="ca-all">Alert all subscribers (--all)</label></div>
     <div class="cmd" id="calrt-cmd"></div>
     <button onclick="copy(candleCmd(),$('calrt-cmd'))">Copy</button>
+  </div>
+  <div id="form-ocancel" style="display:none">
+    <div class="row">
+      <div><label>Order id</label><input id="oc-id" type="text" inputmode="numeric" placeholder="4467051" oninput="refresh()"></div>
+      <div><label>Cancel price</label><input id="oc-price" type="number" step="0.01" placeholder="2490.00" oninput="refresh()"></div>
+    </div>
+    <div class="hint">Set or amend the cancel condition on an existing unfilled order: if price touches the level before the order fills, the bot cancels it. Re-running on the same id replaces the previous level. Grab ids from the Working orders panel below.</div>
+    <div class="cmd" id="ocancel-cmd"></div>
+    <button onclick="copy(ocancelCmd(),$('ocancel-cmd'))">Copy</button>
   </div>
 </section>
 
@@ -216,11 +231,23 @@ function renderOrders(accounts){
     if(a.error)html+='<div class="hint">error: '+esc(a.error)+'</div>';
     if(!rows.length){if(!a.error)html+='<div class="hint">no working orders.</div>';return;}
     rows.forEach(function(r){
-      html+='<div class="orow"><div class="cmd">'+esc(r.side||'?')+' '+esc(r.symbol||'?')+' <b>'+fmtP(r.volume)+'</b> @ '+fmtP(r.price)+'<br><span class="muted">SL '+fmtP(r.sl)+' \u00b7 TP '+fmtP(r.tp)+' \u00b7 '+(r.extra?esc(r.extra):'')+' \u00b7 #'+esc(r.id)+'</span></div><button class="mini" onclick="copy('+r.id+',this)">copy id</button></div>';
+      var meta='SL '+fmtP(r.sl)+' \u00b7 TP '+fmtP(r.tp)+' \u00b7 '+(r.extra?esc(r.extra):'')+' \u00b7 #'+esc(r.id);
+      var amendBtn='';
+      if(r.cancel_level!=null){
+        meta+=' \u00b7 <b>cancel '+fmtP(r.cancel_level)+'</b>';
+        amendBtn='<button class="mini" onclick="amendCancel('+r.id+','+r.cancel_level+')">amend</button>';
+      }
+      html+='<div class="orow"><div class="cmd">'+esc(r.side||'?')+' '+esc(r.symbol||'?')+' <b>'+fmtP(r.volume)+'</b> @ '+fmtP(r.price)+'<br><span class="muted">'+meta+'</span></div>'+amendBtn+'<button class="mini" onclick="copy('+r.id+',this)">copy id</button></div>';
     });
   });
   list.innerHTML=html;
   $('orders-n').textContent='('+total+')';
+}
+function amendCancel(oid,level){
+  $('oc-id').value=oid;
+  $('oc-price').value=level;
+  seg($('oc-btn'),function(){$('form-price').style.display='none';$('form-candle').style.display='none';$('form-ocancel').style.display='';});
+  refresh();
 }
 setInterval(function(){ if(hasToken())loadOrders(); },30000);
 if(hasToken())loadOrders();
