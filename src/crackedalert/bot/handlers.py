@@ -268,16 +268,38 @@ def _finalize_trade_args(entry, sl_raw, widen_raw, rr_raw, risk_raw,
 def parse_alert(text: str, default_symbol: str,
                 known_symbols=None) -> AlertArgs:
     """/alert <target> [symbol] [message...]
+       /alert --price 2450 [--symbol XAUUSD] [--notes approaching demand] [--all]
 
     The bash parser treated the 2nd token as a symbol unconditionally,
     which broke the /help example ("/alert 2450.00 approaching demand").
     Here the 2nd token is a symbol only if the account actually offers it
     (known_symbols); before the first connection, only an ALL-CAPS token
-    is accepted as a symbol.
+    is accepted as a symbol. Flag form (first token starts with '-') is
+    strict: every parameter is named, --notes carries the message.
     """
     tokens = text.split()[1:]
     if not tokens:
         raise ParseError("usage")
+    if _flag_mode(tokens):
+        vals, broadcast = _parse_named(
+            tokens, {"--price": "price", "--target": "price",
+                     "--symbol": "symbol",
+                     "--notes": "notes", "--message": "notes"},
+            required=("price",), multiword="notes")
+        try:
+            target = float(vals["price"])
+        except ValueError:
+            raise ParseError("alert price is not a number")
+        symbol = default_symbol
+        if vals.get("symbol"):
+            candidate = vals["symbol"].upper()
+            if not SYMBOL_RE.match(candidate):
+                raise ParseError(
+                    "symbol '%s' is not valid" % vals["symbol"])
+            symbol = candidate
+        message = vals.get("notes") or DEFAULT_ALERT_MESSAGE
+        return AlertArgs(target=target, symbol=symbol, message=message,
+                         broadcast=broadcast)
     try:
         target = float(tokens[0])
     except ValueError:
@@ -300,20 +322,32 @@ def parse_alert(text: str, default_symbol: str,
 
 def parse_ocancel(text: str) -> tuple:
     """/ocancel <order_id> <price>
+       /ocancel --id 4467051 --price 4612
 
     Guards an EXISTING unfilled pending order with a cancel condition:
     if price touches <price> before the order fills, the order is
-    cancelled at the broker.
+    cancelled at the broker. Flag form: --id/--order and --price.
     """
     tokens = text.split()
-    if len(tokens) != 3:
+    if not tokens or len(tokens) == 1:
         raise ParseError("expected /ocancel <order_id> <price>")
+    rest = tokens[1:]
+    if _flag_mode(rest):
+        vals, _b = _parse_named(
+            rest, {"--id": "id", "--order": "id", "--order-id": "id",
+                   "--price": "price", "--cancel": "price"},
+            required=("id", "price"))
+        raw_id, raw_price = vals["id"], vals["price"]
+    else:
+        if len(tokens) != 3:
+            raise ParseError("expected /ocancel <order_id> <price>")
+        raw_id, raw_price = tokens[1], tokens[2]
     try:
-        order_id = int(tokens[1])
+        order_id = int(raw_id)
     except ValueError:
         raise ParseError("order id is not a number")
     try:
-        price = float(tokens[2])
+        price = float(raw_price)
     except ValueError:
         raise ParseError("cancel price is not a number")
     return order_id, price
@@ -321,6 +355,7 @@ def parse_ocancel(text: str) -> tuple:
 
 def parse_guard(text: str) -> tuple:
     """/guard <position_id> <price> <tf> [--all]
+       /guard --id 4467051 --price 4080 --tf H1 [--all]
 
     Attaches a candle-close guard to an EXISTING position: when a <tf>
     candle CLOSES past <price> (below for a BUY, above for a SELL), the
@@ -331,23 +366,133 @@ def parse_guard(text: str) -> tuple:
     if len(tokens) < 2:
         raise ParseError("expected /guard <position_id> <price> <tf> [--all]")
     rest = tokens[1:]
-    broadcast = _pop_broadcast(rest)
-    if len(rest) != 3:
-        raise ParseError("expected /guard <position_id> <price> <tf> [--all]")
+    if _flag_mode(rest):
+        vals, broadcast = _parse_named(
+            rest, {"--id": "id", "--position": "id",
+                   "--position-id": "id",
+                   "--price": "price",
+                   "--tf": "tf", "--timeframe": "tf"},
+            required=("id", "price", "tf"))
+        raw_id, raw_price, raw_tf = vals["id"], vals["price"], vals["tf"]
+    else:
+        broadcast = _pop_broadcast(rest)
+        if len(rest) != 3:
+            raise ParseError(
+                "expected /guard <position_id> <price> <tf> [--all]")
+        raw_id, raw_price, raw_tf = rest
     try:
-        position_id = int(rest[0])
+        position_id = int(raw_id)
     except ValueError:
         raise ParseError("position id is not a number")
     try:
-        price = float(rest[1])
+        price = float(raw_price)
     except ValueError:
         raise ParseError("guard price is not a number")
-    tf = rest[2].upper()
+    tf = raw_tf.upper()
     if tf not in candles_mod.TIMEFRAMES:
         raise ParseError(
             "guard timeframe '%s' is not valid. Use: %s"
             % (tf, " ".join(candles_mod.TIMEFRAMES)))
     return position_id, price, tf, broadcast
+
+
+def _flag_mode(tokens: list) -> bool:
+    """True when the first token starts a named-flag form (--name value).
+
+    Broadcast aliases (-all, -a, ...) never count as flag mode, so a
+    command like "/m ... -all" still parses positionally.
+    """
+    if not tokens:
+        return False
+    low = tokens[0].lower()
+    return low.startswith("-") and low not in _BROADCAST_FLAGS
+
+
+def _parse_named(tokens: list, names: dict, required: tuple = (),
+                 multiword: Optional[str] = None) -> tuple:
+    """Scan `--name value` pairs into {canonical: raw_value}.
+
+    `names` maps lowercase flag spellings (aliases included) to the
+    canonical parameter name. `required` are canonical names that must be
+    present. `multiword` (e.g. notes) consumes everything after its flag
+    as one value -- except a trailing broadcast flag, which is peeled off
+    so "--all" never leaks into a message.
+
+    Broadcast aliases are stripped wherever they appear. Unknown options
+    and stray non-flag tokens are errors (flag mode is strict: every
+    parameter is named).
+
+    Returns (values, broadcast).
+    """
+    vals = {}
+    broadcast = False
+    i = 0
+    while i < len(tokens):
+        low = tokens[i].lower()
+        if low in _BROADCAST_FLAGS:
+            broadcast = True
+            i += 1
+            continue
+        if low not in names:
+            raise ParseError("unknown option '%s'" % tokens[i])
+        canonical = names[low]
+        if i + 1 >= len(tokens):
+            raise ParseError("expected a value after %s" % tokens[i])
+        if canonical == multiword:
+            tail = tokens[i + 1:]
+            if tail and tail[-1].lower() in _BROADCAST_FLAGS:
+                broadcast = True
+                tail = tail[:-1]
+            vals[canonical] = " ".join(tail)
+            i = len(tokens)
+        else:
+            vals[canonical] = tokens[i + 1]
+            i += 2
+    missing = [name for name in required if name not in vals]
+    if missing:
+        raise ParseError("missing option(s): %s" % ", ".join(missing))
+    return vals, broadcast
+
+
+_ACCOUNT_FLAG_NAMES = {"--account": "account", "--acct": "account"}
+_ID_ACCOUNT_FLAG_NAMES = {
+    "--id": "id", "--order": "id", "--position": "id",
+    "--account": "account", "--acct": "account",
+}
+
+
+def parse_account(text: str) -> str:
+    """/orders|/positions|/close_all|/be <account>
+       or --account <acct> form."""
+    tokens = text.split()[1:]
+    if not tokens:
+        raise ParseError("usage")
+    if _flag_mode(tokens):
+        vals, _b = _parse_named(tokens, _ACCOUNT_FLAG_NAMES,
+                                required=("account",))
+        return vals["account"]
+    return tokens[0]
+
+
+def parse_id_account(text: str) -> tuple:
+    """/close|/cancel_order <id> <account>
+       or --id <id> --account <acct> form."""
+    tokens = text.split()[1:]
+    if not tokens:
+        raise ParseError("usage")
+    if _flag_mode(tokens):
+        vals, _b = _parse_named(tokens, _ID_ACCOUNT_FLAG_NAMES,
+                                required=("id", "account"))
+        raw_id, account = vals["id"], vals["account"]
+    else:
+        if len(tokens) < 2:
+            raise ParseError("usage")
+        raw_id, account = tokens[0], tokens[1]
+    try:
+        ident = int(raw_id)
+    except ValueError:
+        raise ParseError("id is not a number")
+    return ident, account
 
 
 def _is_number(token: str) -> bool:
@@ -385,12 +530,47 @@ class CandleAlertArgs:
 
 def parse_cc_alert(text: str, default_symbol: str) -> CandleAlertArgs:
     """/ccalert <tf> <price> <above|below> [symbol] [notes...]
+       /ccalert --tf M15 --price 2450 --dir above [--symbol XAUUSD]
+                [--notes breakout] [--all]
 
     Timeframe must be a known cTrader period. Direction is above|below.
     The 4th token is a symbol only if it looks like one (ALL-CAPS or a
-    known symbol); otherwise it's folded into the notes.
+    known symbol); otherwise it's folded into the notes. Flag form (first
+    token starts with '-') is strict: every parameter is named.
     """
     tokens = text.split()[1:]
+    if not tokens:
+        raise ParseError("usage")
+    if _flag_mode(tokens):
+        vals, broadcast = _parse_named(
+            tokens, {"--tf": "tf", "--timeframe": "tf",
+                     "--price": "price",
+                     "--dir": "dir", "--direction": "dir",
+                     "--symbol": "symbol",
+                     "--notes": "notes", "--message": "notes"},
+            required=("tf", "price", "dir"), multiword="notes")
+        timeframe = vals["tf"].upper()
+        if timeframe not in candles_mod.TIMEFRAMES:
+            raise ParseError("timeframe")
+        try:
+            target = float(vals["price"])
+        except ValueError:
+            raise ParseError("price is not a number")
+        direction = vals["dir"].upper()
+        if direction not in (alerts_mod.CANDLE_ABOVE,
+                             alerts_mod.CANDLE_BELOW):
+            raise ParseError("direction")
+        symbol = default_symbol
+        if vals.get("symbol"):
+            candidate = vals["symbol"].upper()
+            if not SYMBOL_RE.match(candidate):
+                raise ParseError(
+                    "symbol '%s' is not valid" % vals["symbol"])
+            symbol = candidate
+        message = vals.get("notes") or "timeframe candle target reached."
+        return CandleAlertArgs(timeframe=timeframe, target=target,
+                               direction=direction, symbol=symbol,
+                               message=message, broadcast=broadcast)
     if len(tokens) < 3:
         raise ParseError("usage")
     timeframe = tokens[0].upper()
@@ -594,12 +774,12 @@ class Handlers:
                                    is_positions: bool) -> None:
         if not self._allowed(update):
             return
-        tokens = update.effective_message.text.split()
-        if len(tokens) < 2:
+        try:
+            account = parse_account(update.effective_message.text)
+        except ParseError:
             await self._reply(
                 update, fmt.positions_usage(is_positions))
             return
-        account = tokens[1]
         try:
             rows = await self._trader.positions_or_orders(
                 account, is_positions)
@@ -621,11 +801,11 @@ class Handlers:
                         _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return
-        tokens = update.effective_message.text.split()
-        if len(tokens) < 2:
+        try:
+            account = parse_account(update.effective_message.text)
+        except ParseError:
             await self._reply(update, fmt.close_all_usage())
             return
-        account = tokens[1]
         try:
             results = await self._trader.close_all(account)
         except TradeRejected as e:
@@ -652,16 +832,12 @@ class Handlers:
                              _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return
-        tokens = update.effective_message.text.split()
-        if len(tokens) < 3:
-            await self._reply(update, fmt.close_usage())
-            return
         try:
-            position_id = int(tokens[1])
-        except ValueError:
+            position_id, account = parse_id_account(
+                update.effective_message.text)
+        except ParseError:
             await self._reply(update, fmt.close_usage())
             return
-        account = tokens[2]
         try:
             await self._trader.close_position(account, position_id)
         except TradeRejected as e:
@@ -688,16 +864,12 @@ class Handlers:
                            _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return
-        tokens = update.effective_message.text.split()
-        if len(tokens) < 3:
-            await self._reply(update, fmt.cancel_order_usage())
-            return
         try:
-            order_id = int(tokens[1])
-        except ValueError:
+            order_id, account = parse_id_account(
+                update.effective_message.text)
+        except ParseError:
             await self._reply(update, fmt.cancel_order_usage())
             return
-        account = tokens[2]
         try:
             await self._trader.cancel_order(account, order_id)
         except TradeRejected as e:
@@ -718,11 +890,11 @@ class Handlers:
                         _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return
-        tokens = update.effective_message.text.split()
-        if len(tokens) < 2:
+        try:
+            account = parse_account(update.effective_message.text)
+        except ParseError:
             await self._reply(update, fmt.breakeven_usage())
             return
-        account = tokens[1]
         try:
             results = await self._trader.breakeven(account)
         except TradeRejected as e:

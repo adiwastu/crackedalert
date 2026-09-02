@@ -512,5 +512,155 @@ class CandleAlertParsing(unittest.TestCase):
         self.assertFalse(a.broadcast)
 
 
+class NamedFlagCommandParsing(unittest.TestCase):
+    """v2.0.61: named-flag form for every command's parameters.
+
+    /alert, /ccalert, /guard and /ocancel flag mode triggers when the
+    first argument starts with '-'. Flag mode is strict: every parameter
+    is named (--notes/--message carries multiword text), --all is peeled
+    off anywhere (including off the end of a --notes value).
+    """
+
+    def test_alert_flag_mode_full(self):
+        a = handlers.parse_alert(
+            "/alert --price 2450 --symbol EURUSD --notes watch this --all",
+            "XAUUSD", {"EURUSD", "XAUUSD"})
+        self.assertEqual(a.target, 2450.0)
+        self.assertEqual(a.symbol, "EURUSD")
+        self.assertEqual(a.message, "watch this")
+        self.assertTrue(a.broadcast)
+
+    def test_alert_flag_mode_defaults(self):
+        a = handlers.parse_alert("/alert --price 2450", "XAUUSD")
+        self.assertEqual((a.target, a.symbol), (2450.0, "XAUUSD"))
+        self.assertEqual(a.message, "Price target reached.")
+        self.assertFalse(a.broadcast)
+
+    def test_alert_flag_mode_target_alias_and_message_alias(self):
+        a = handlers.parse_alert(
+            "/alert --target 2450 --message approaching demand", "XAUUSD")
+        self.assertEqual(a.target, 2450.0)
+        self.assertEqual(a.message, "approaching demand")
+
+    def test_alert_flag_mode_errors(self):
+        for text in ["/alert --symbol XAUUSD",
+                     "/alert --price abc",
+                     "/alert --price 2450 --frobnicate x",
+                     "/alert --price 2450 2450"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_alert(text, "XAUUSD")
+
+    def test_alert_flag_all_peeled_from_notes(self):
+        a = handlers.parse_alert(
+            "/alert --price 2450 --notes hello there --all", "XAUUSD")
+        self.assertEqual(a.message, "hello there")
+        self.assertTrue(a.broadcast)
+
+    def test_ccalert_flag_mode_full(self):
+        c = handlers.parse_cc_alert(
+            "/ccalert --tf M15 --price 2450 --dir above --symbol EURUSD "
+            "--notes breakout --all", "XAUUSD")
+        self.assertEqual(c.timeframe, "M15")
+        self.assertEqual(c.target, 2450.0)
+        self.assertEqual(c.direction, "ABOVE")
+        self.assertEqual(c.symbol, "EURUSD")
+        self.assertEqual(c.message, "breakout")
+        self.assertTrue(c.broadcast)
+
+    def test_ccalert_flag_mode_defaults(self):
+        c = handlers.parse_cc_alert(
+            "/ccalert --tf H1 --price 2400 --dir below", "XAUUSD")
+        self.assertEqual(c.symbol, "XAUUSD")
+        self.assertIn("target reached", c.message)
+        self.assertFalse(c.broadcast)
+
+    def test_ccalert_flag_mode_direction_alias(self):
+        c = handlers.parse_cc_alert(
+            "/ccalert --timeframe M5 --price 1.10 --direction above",
+            "EURUSD")
+        self.assertEqual((c.timeframe, c.direction), ("M5", "ABOVE"))
+
+    def test_ccalert_flag_mode_errors(self):
+        for text in ["/ccalert --price 2450",
+                     "/ccalert --tf X9 --price 2450 --dir above",
+                     "/ccalert --tf M15 --price abc --dir above",
+                     "/ccalert --tf M15 --price 2450 --dir sideways",
+                     "/ccalert --tf M15 --price 2450 --dir above junk"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_cc_alert(text, "XAUUSD")
+
+    def test_guard_flag_mode_full(self):
+        self.assertEqual(
+            handlers.parse_guard(
+                "/guard --id 4467051 --price 4080 --tf H1 --all"),
+            (4467051, 4080.0, "H1", True))
+
+    def test_guard_flag_mode_aliases(self):
+        self.assertEqual(
+            handlers.parse_guard(
+                "/guard --position-id 7 --timeframe m15 --price 4080"),
+            (7, 4080.0, "M15", False))
+
+    def test_guard_flag_mode_errors(self):
+        for text in ["/guard --price 4080 --tf H1",
+                     "/guard --id abc --price 4080 --tf H1",
+                     "/guard --id 1 --price x --tf H1",
+                     "/guard --id 1 --price 4080 --tf X99",
+                     "/guard --id 1 --price 4080 --tf H1 stray"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_guard(text)
+
+    def test_ocancel_flag_mode_full(self):
+        self.assertEqual(
+            handlers.parse_ocancel(
+                "/ocancel --id 4467051 --price 4612"),
+            (4467051, 4612.0))
+
+    def test_ocancel_flag_mode_aliases(self):
+        self.assertEqual(
+            handlers.parse_ocancel("/ocancel --order 1 --cancel 4612"),
+            (1, 4612.0))
+
+    def test_ocancel_flag_mode_errors(self):
+        for text in ["/ocancel --price 4612",
+                     "/ocancel --id abc --price 4612",
+                     "/ocancel --id 1 --price x",
+                     "/ocancel --id 1 --price 4612 stray"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_ocancel(text)
+
+    def test_account_flag_mode(self):
+        self.assertEqual(
+            handlers.parse_account("/orders --account demo"), "demo")
+        self.assertEqual(
+            handlers.parse_account("/orders --acct live100k"), "live100k")
+        self.assertEqual(handlers.parse_account("/positions demo"), "demo")
+
+    def test_account_flag_mode_errors(self):
+        for text in ["/orders", "/orders --frobnicate x"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_account(text)
+
+    def test_id_account_flag_mode(self):
+        self.assertEqual(
+            handlers.parse_id_account(
+                "/close --id 4467051 --account live100k"),
+            (4467051, "live100k"))
+        self.assertEqual(
+            handlers.parse_id_account(
+                "/cancel_order --position 42 --acct demo"),
+            (42, "demo"))
+        self.assertEqual(
+            handlers.parse_id_account("/close 4467051 live100k"),
+            (4467051, "live100k"))
+
+    def test_id_account_flag_mode_errors(self):
+        for text in ["/close", "/close --account demo",
+                     "/close --id abc --account demo",
+                     "/close 4467051"]:
+            with self.assertRaises(handlers.ParseError):
+                handlers.parse_id_account(text)
+
+
 if __name__ == "__main__":
     unittest.main()

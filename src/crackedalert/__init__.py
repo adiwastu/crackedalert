@@ -3,7 +3,7 @@
 import os
 import subprocess
 
-__version__ = "2.0.60"
+__version__ = "2.0.61"
 
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -124,7 +124,7 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn('id="oc-id"', self.ui)
         self.assertIn('id="oc-price"', self.ui)
         self.assertIn("function ocancelCmd", self.ui)
-        self.assertIn("'/ocancel '", self.ui)
+        self.assertIn("'/ocancel --id '", self.ui)
         self.assertIn("function amendCancel", self.ui)
 
     def test_orders_panel_shows_cancel_level(self) -> None:
@@ -148,6 +148,30 @@ class FrontendContractTest(unittest.TestCase):
         # Candle-close TF defaults to M5 (both the smart-SL TF and the
         # /ccalert builder now preselect M5).
         self.assertEqual(self.ui.count("<option selected>M5</option>"), 2)
+
+    def test_trade_builder_emits_named_flags(self) -> None:
+        # v2.0.61: every builder copies named-flag commands (flag form is
+        # the only syntax the UI produces now).
+        self.assertIn("'/m','--sl'", self.ui)
+        self.assertIn("'/p','--entry'", self.ui)
+        self.assertIn("'--widen'", self.ui)
+        self.assertIn("'--rr'", self.ui)
+        self.assertIn("'--risk'", self.ui)
+        self.assertIn("'--account'", self.ui)
+
+    def test_alert_builders_emit_named_flags(self) -> None:
+        self.assertIn("'/alert --price '", self.ui)
+        self.assertIn("' --notes '+notes", self.ui)
+        self.assertIn("'/ccalert --tf '", self.ui)
+        self.assertIn("' --dir '+dir", self.ui)
+        self.assertIn("' --symbol '+sym", self.ui)
+        self.assertIn("'/ocancel --id '", self.ui)
+
+    def test_no_positional_builder_output_remains(self) -> None:
+        # The old positional concatenations are gone from the builders.
+        self.assertNotIn("'/m',sl,widen", self.ui)
+        self.assertNotIn("'/p',entry,sl", self.ui)
+        self.assertNotIn("'/alert '+p", self.ui)
 
     def test_no_tradingview_page_reference(self) -> None:
         # The TradingView import page was deleted (too much upkeep for its

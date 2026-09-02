@@ -66,10 +66,10 @@ function ordCmd(){
   if(!sl)return null;
   let base;
   if(S.orderType==='market'){
-    base=['/m',sl,widen,S.rr,S.risk,S.acct];
+    base=['/m','--sl',sl,'--widen',widen,'--rr',String(S.rr),'--risk',String(S.risk),'--account',S.acct];
   }else{
     if(!entry)return null;
-    base=['/p',entry,sl,widen,S.rr,S.risk,S.acct];
+    base=['/p','--entry',entry,'--sl',sl,'--widen',widen,'--rr',String(S.rr),'--risk',String(S.risk),'--account',S.acct];
     const cc=$('cancel-price').value;
     if(cc)base.push('--cancel',cc);
   }
@@ -106,17 +106,17 @@ function ordReadout(){
 function priceCmd(){
   const p=$('a-price').value, notes=$('a-notes').value;
   if(!p)return null;
-  return '/alert '+p+(notes?' '+notes:'')+(S.priceBroadcast?' --all':'');
+  return '/alert --price '+p+(notes?' --notes '+notes:'')+(S.priceBroadcast?' --all':'');
 }
 function candleCmd(){
   const p=$('cc-price').value, tf=$('cc-tf').value, dir=$('cc-dir').value, sym=$('cc-sym').value||'XAUUSD', note=$('cc-note').value;
   if(!p)return null;
-  return '/ccalert '+tf+' '+p+' '+dir+' '+sym+(note?' '+note:'')+(S.candleBroadcast?' --all':'');
+  return '/ccalert --tf '+tf+' --price '+p+' --dir '+dir+' --symbol '+sym+(note?' --notes '+note:'')+(S.candleBroadcast?' --all':'');
 }
 function ocancelCmd(){
   const oid=$('oc-id').value, price=$('oc-price').value;
   if(!oid||!price)return null;
-  return '/ocancel '+oid+' '+price;
+  return '/ocancel --id '+oid+' --price '+price;
 }
 function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').textContent=candleCmd()??''; $('ocancel-cmd').textContent=ocancelCmd()??''; }
 </script>
