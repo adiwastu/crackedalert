@@ -78,8 +78,7 @@ UI_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' \
     "$REPO_DIR/src/crackedalert/__init__.py" | head -1)"
 if [ -n "$UI_VERSION" ]; then
     sed -i "s/__VERSION__/$UI_VERSION/g" \
-        /var/www/crackedalert-ui/ui.html \
-        /var/www/crackedalert-ui/tv.html
+        /var/www/crackedalert-ui/ui.html
     echo "=> UI stamped with version $UI_VERSION"
 fi
 

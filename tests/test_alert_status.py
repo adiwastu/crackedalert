@@ -5,6 +5,9 @@ wrong token), the active -> ack -> inactive state machine, and that an idle
 endpoint reports active:false. Tests talk to the in-process asyncio server
 over a raw socket (asyncio.open_connection) because the hand-rolled server
 does not interoperate with urllib/http.client on all hosts.
+
+Also covers GET /orders (command-builder UI): auth, 503 without a wired
+provider, 200 with the provider's payload, 500 when the provider raises.
 """
 
 import asyncio
@@ -145,6 +148,67 @@ class AlertStatusEndpointTest(unittest.TestCase):
                    b"Host: h\r\nConnection: close\r\n\r\n")
         data = self.loop.run_until_complete(_raw(self.port, payload))
         self.assertEqual(_status(data), 404)
+
+
+class OrdersEndpointTest(unittest.TestCase):
+    """GET /orders backing the UI's working-orders panel."""
+
+    def setUp(self) -> None:
+        self.active = ActiveAlert()
+        self.port = 18991 + (self._testMethodName.__len__() % 40)
+        self.server = AlertStatusServer(token="sekrit", active=self.active,
+                                        port=self.port)
+        self.loop = asyncio.new_event_loop()
+        self.loop.run_until_complete(self.server.start())
+        self.addCleanup(self._close)
+
+    def _close(self) -> None:
+        self.loop.run_until_complete(self.server.stop())
+        self.loop.close()
+
+    def _orders(self, token: str) -> tuple:
+        payload = (f"GET /orders?token={token} HTTP/1.1\r\n"
+                   "Host: h\r\nConnection: close\r\n\r\n").encode()
+        data = self.loop.run_until_complete(_raw(self.port, payload))
+        return _status(data), _body(data)
+
+    def test_requires_token(self) -> None:
+        status, body = self._orders("")
+        self.assertEqual(status, 401)
+        self.assertEqual(body, {"error": "unauthorized"})
+
+    def test_wrong_token_rejected(self) -> None:
+        status, body = self._orders("nope")
+        self.assertEqual(status, 401)
+
+    def test_unavailable_without_provider(self) -> None:
+        status, body = self._orders("sekrit")
+        self.assertEqual(status, 503)
+        self.assertEqual(body, {"error": "orders endpoint unavailable"})
+
+    def test_returns_provider_payload(self) -> None:
+        async def fake() -> dict:
+            return {"accounts": {"demo": {
+                "orders": [{"id": 4467051, "symbol": "XAUUSD",
+                            "side": "BUY", "volume": 0.02,
+                            "price": 2450.0, "sl": 2445.0,
+                            "tp": 2455.0, "extra": "LIMIT"}],
+                "error": None}}}
+        self.server.set_orders_provider(fake)
+        status, body = self._orders("sekrit")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["accounts"]["demo"]["orders"][0]["id"],
+                         4467051)
+        self.assertEqual(body["accounts"]["demo"]["orders"][0]["side"],
+                         "BUY")
+
+    def test_provider_error_returns_500(self) -> None:
+        async def broken() -> dict:
+            raise RuntimeError("boom")
+        self.server.set_orders_provider(broken)
+        status, body = self._orders("sekrit")
+        self.assertEqual(status, 500)
+        self.assertEqual(body, {"error": "orders fetch failed"})
 
 
 if __name__ == "__main__":

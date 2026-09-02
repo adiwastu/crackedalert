@@ -6,6 +6,10 @@ alert.hotland3x3.my.id {
 	handle /ack {
 		reverse_proxy 127.0.0.1:8190
 	}
+	# Working-orders data for the command-builder UI -> same bot endpoint.
+	handle /orders {
+		reverse_proxy 127.0.0.1:8190
+	}
 	# Static command-builder UI for everything else.
 	handle {
 		root * /var/www/crackedalert-ui

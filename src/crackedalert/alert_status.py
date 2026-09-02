@@ -2,7 +2,7 @@
 
 A small mobile alarm app on the user's phone polls ``GET /alert-status`` to
 decide whether to ring until dismissed. This module is deliberately
-stdlib-only (no new dependency): an asyncio server that answers two routes
+stdlib-only (no new dependency): an asyncio server that answers routes
 inside the bot's existing event loop.
 
 Routes (all require the ``ALERT_STATUS_TOKEN`` as ``?token=`` or the
@@ -14,12 +14,23 @@ Routes (all require the ``ALERT_STATUS_TOKEN`` as ``?token=`` or the
                 "detail": "<escaped alert text>"}      (an alert is live)
         -> 401 {"error": "unauthorized"}               (bad/missing token)
 
+    GET  /orders
+        -> 200 {"accounts": {<shortcode>: {"orders": [...], "error": null}}}
+           Working (unfilled) orders per account for the command-builder
+           UI. Each order row is what TradingService.positions_or_orders
+           returns ({id, symbol, side, volume, price, sl, tp, extra, ...}).
+        -> 503 {"error": "orders endpoint unavailable"} (no provider wired)
+        -> 500 {"error": "orders fetch failed"}         (provider raised)
+        -> 401 {"error": "unauthorized"}
+
     POST /ack
         -> 200 {"ok": true}                            (clears active state)
         -> 401 {"error": "unauthorized"}
 
-The endpoint only ever reveals the alert's text and timestamp -- never
-cTrader credentials, balances, tokens, or chat ids.
+The endpoints only ever reveal the alert's text/timestamp and working
+order ids -- never cTrader credentials, balances, tokens, or chat ids.
+/orders is READ-ONLY: nothing on this server can place, cancel, or close
+orders (that stays on the token-gated Telegram side).
 """
 
 import asyncio
@@ -27,7 +38,7 @@ import hmac
 import json
 import logging
 import time
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 from urllib.parse import parse_qs, urlsplit
 
 log = logging.getLogger("crackedalert.alert_status")
@@ -74,7 +85,8 @@ def _json(obj) -> bytes:
 
 def _make_response(status: int, body: bytes) -> bytes:
     reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized",
-              404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
+              404: "Not Found", 500: "Internal Server Error",
+              503: "Service Unavailable"}.get(status, "OK")
     crlf = "\r\n"
     head = (
         f"HTTP/1.1 {status} {reason}{crlf}"
@@ -89,12 +101,21 @@ class AlertStatusServer:
     """An asyncio TCP server answering the alert-status endpoints."""
 
     def __init__(self, token: str, active: ActiveAlert,
-                 host: str = "127.0.0.1", port: int = 8190) -> None:
+                 host: str = "127.0.0.1", port: int = 8190,
+                 orders_provider: Optional[Callable[[], Awaitable[dict]]] = None
+                 ) -> None:
         self._token = token
         self._active = active
         self._host = host
         self._port = port
+        # orders_provider: async callable -> {"accounts": {...}}; wired by
+        # main.py once the TradingService exists (see set_orders_provider).
+        self._orders_provider = orders_provider
         self._server: Optional[asyncio.AbstractServer] = None
+
+    def set_orders_provider(self, provider) -> None:
+        """Attach (or swap) the async callable backing GET /orders."""
+        self._orders_provider = provider
 
     async def _handle(self, reader: asyncio.StreamReader,
                       writer: asyncio.StreamWriter) -> None:
@@ -152,11 +173,29 @@ class AlertStatusServer:
             else:
                 body = _json({"active": False})
             await self._respond(writer, 200, body)
+        elif method == "GET" and path == "/orders":
+            await self._respond_orders(writer)
         elif method == "POST" and path == "/ack":
             self._active.clear()
             await self._respond(writer, 200, _json({"ok": True}))
         else:
             await self._respond(writer, 404, _json({"error": "not found"}))
+
+    async def _respond_orders(self, writer) -> None:
+        """GET /orders: working orders per account from the UI provider."""
+        if self._orders_provider is None:
+            await self._respond(
+                writer, 503,
+                _json({"error": "orders endpoint unavailable"}))
+            return
+        try:
+            data = await self._orders_provider()
+        except Exception as e:
+            log.warning("orders provider failed: %s", e)
+            await self._respond(
+                writer, 500, _json({"error": "orders fetch failed"}))
+            return
+        await self._respond(writer, 200, _json(data))
 
     async def _respond(self, writer, status: int, body: bytes) -> None:
         try:

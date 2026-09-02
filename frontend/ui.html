@@ -21,6 +21,12 @@ button:focus-visible{outline:3px solid #ffdd00;outline-offset:-2px}
 .seg button{flex:1;padding:8px;background:#fff;color:#111;border:none;border-right:1px solid #111;font-size:14px}
 .seg button:last-child{border-right:none}
 .seg button.active{background:#111;color:#fff}
+.mini{display:inline-block;width:auto;padding:6px 10px;font-size:13px;font-weight:700;border-radius:4px;flex:none}
+.muted{color:#666;font-size:12px}
+.hint{font-size:13px;color:#666;margin-top:6px}
+.acct{font-weight:700;font-size:13px;margin:12px 0 2px}
+.orow{display:flex;gap:6px;align-items:center;margin-top:8px}
+.orow .cmd{flex:1;margin:0}
 </style>
 
 <h1>Cracked Alert <b>v__VERSION__</b></h1>
@@ -144,6 +150,65 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
     <button onclick="copy(candleCmd(),$('calrt-cmd'))">Copy</button>
   </div>
 </section>
+
+<section>
+  <div class="row" style="align-items:center">
+    <div style="flex:3"><b>Working orders</b> <span class="muted" id="orders-n"></span></div>
+    <div style="flex:1"><button class="mini" onclick="loadOrders()">Refresh</button></div>
+  </div>
+  <div class="hint">Unfilled limit/stop orders on the linked accounts — tap <b>copy id</b> for an id to use with <code>/ocancel</code> or <code>/cancel_order</code> in Telegram. Read-only; asks for the alert-status token once.</div>
+  <div class="readout" id="orders-status"></div>
+  <div id="orders-list"></div>
+</section>
+
+<script>
+// ---- Working orders (bot GET /orders, read-only) ----
+const TK='ca_token';
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function fmtP(v){
+  if(v==null||v==='')return '\u2013';
+  var s=Number(v).toFixed(2).replace(/\.?0+$/,'');
+  return s;
+}
+function loadOrders(){
+  var t=localStorage.getItem(TK);
+  if(!t){
+    t=prompt('Alert-status token (ALERT_STATUS_TOKEN in /etc/cracked_alert/.env_cracked):');
+    if(!t)return;
+    localStorage.setItem(TK,t);
+  }
+  var st=$('orders-status');
+  st.textContent='Loading\u2026';
+  fetch('/orders?token='+encodeURIComponent(t)).then(function(r){
+    if(r.status===401){localStorage.removeItem(TK);st.textContent='Bad token \u2014 tap Refresh and enter it again.';return null;}
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(function(d){
+    if(!d)return;
+    if(d.error){st.textContent=d.error;return;}
+    renderOrders(d.accounts);
+    st.textContent='Updated '+new Date().toLocaleTimeString();
+  }).catch(function(e){st.textContent='fetch failed: '+e.message;});
+}
+function renderOrders(accounts){
+  var list=$('orders-list'),keys=Object.keys(accounts),html='',total=0;
+  if(!keys.length){list.innerHTML='<div class="hint">no accounts configured.</div>';$('orders-n').textContent='';return;}
+  keys.forEach(function(acct){
+    var a=accounts[acct],rows=a.orders||[];
+    total+=rows.length;
+    html+='<div class="acct">'+esc(acct)+'</div>';
+    if(a.error)html+='<div class="hint">error: '+esc(a.error)+'</div>';
+    if(!rows.length){if(!a.error)html+='<div class="hint">no working orders.</div>';return;}
+    rows.forEach(function(r){
+      html+='<div class="orow"><div class="cmd">'+esc(r.side||'?')+' '+esc(r.symbol||'?')+' <b>'+fmtP(r.volume)+'</b> @ '+fmtP(r.price)+'<br><span class="muted">SL '+fmtP(r.sl)+' \u00b7 TP '+fmtP(r.tp)+' \u00b7 '+(r.extra?esc(r.extra):'')+' \u00b7 #'+esc(r.id)+'</span></div><button class="mini" onclick="copy('+r.id+',this)">copy id</button></div>';
+    });
+  });
+  list.innerHTML=html;
+  $('orders-n').textContent='('+total+')';
+}
+setInterval(function(){ if(localStorage.getItem(TK))loadOrders(); },30000);
+if(localStorage.getItem(TK))loadOrders();
+</script>
 
 <script>
 ordReadout();

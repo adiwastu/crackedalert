@@ -15,67 +15,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 UI_PATH = ROOT / "frontend" / "ui.html"
-TV_PATH = ROOT / "frontend" / "tv.html"
-
-
-class TradingViewImportContractTest(unittest.TestCase):
-    """frontend/tv.html: TradingView clipboard import -> /m /p command.
-
-    The page must keep the clipboard parser, the doc's field extraction
-    (entry/stopLevel/profitLevel), and the current --smart-sl <price> <tf>
-    syntax so a future UI-only change can't silently regress them.
-    """
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.tv = TV_PATH.read_text(encoding="utf-8")
-
-    def test_version_token_present(self) -> None:
-        # Same __VERSION__ stamping as ui.html (see deploy_v2.sh).
-        self.assertIn("__VERSION__", self.tv)
-
-    def test_clipboard_parser_present(self) -> None:
-        self.assertIn("data-tradingview-clip", self.tv)
-        self.assertIn("parseTradingViewClip", self.tv)
-        self.assertIn("querySelector('[data-tradingview-clip]')", self.tv)
-
-    def test_field_extraction_present(self) -> None:
-        self.assertIn("points.0.price", self.tv)
-        self.assertIn("stopLevel", self.tv)
-        self.assertIn("profitLevel", self.tv)
-        self.assertIn("LineToolRiskRewardShort", self.tv)
-
-    def test_smart_sl_syntax_present(self) -> None:
-        self.assertIn("--smart-sl", self.tv)
-        self.assertIn("smart-tf", self.tv)
-        self.assertIn("M30", self.tv)
-
-    def test_builder_ids_present(self) -> None:
-        self.assertIn('id="tv-trade-cmd"', self.tv)
-        self.assertIn('id="tv-paste"', self.tv)
-        self.assertIn('id="tv-symbol"', self.tv)
-
-    def test_pending_only(self) -> None:
-        # The drawing page is strictly for pending orders: no /m toggle,
-        # and the pending-order builder is ALWAYS visible (never display:none).
-        self.assertNotIn("seg-market", self.tv)
-        self.assertNotIn("'/m'", self.tv)
-        self.assertIn("'/p'", self.tv)
-        self.assertNotIn("#builder{display:none}", self.tv)
-
-    def test_no_alert_builder(self) -> None:
-        # Strictly a pending-order page: no /alert or /ccalert UI.
-        self.assertNotIn("tv-alert", self.tv)
-        self.assertNotIn("prefillAlert", self.tv)
-        self.assertNotIn("note-presets", self.tv)
-        self.assertNotIn("refreshAlert", self.tv)
-
-    def test_prefills_present(self) -> None:
-        # RR derived from the drawing, risk% from the clip.
-        self.assertIn("setSelect('tv-rr'", self.tv)
-        self.assertIn("sources.0.source.state.risk", self.tv)
-        self.assertIn("Bot TP at RR", self.tv)
-        self.assertNotIn("tv-cc-on", self.tv)   # positional pair removed
 
 
 class FrontendContractTest(unittest.TestCase):
@@ -158,6 +97,22 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn('id="trade-cmd"', self.ui)
         self.assertIn('id="palrt-cmd"', self.ui)
         self.assertIn('id="calrt-cmd"', self.ui)
+
+    def test_orders_panel_present(self) -> None:
+        # v2.0.56: the UI lists working orders from the bot's read-only
+        # GET /orders endpoint, with a per-row copy-id button for
+        # /ocancel + /cancel_order.
+        self.assertIn('id="orders-n"', self.ui)
+        self.assertIn('id="orders-list"', self.ui)
+        self.assertIn("function loadOrders", self.ui)
+        self.assertIn("'/orders?token='", self.ui)
+        self.assertIn("copy('+r.id+',this)", self.ui)
+        self.assertIn("function renderOrders", self.ui)
+
+    def test_no_tradingview_page_reference(self) -> None:
+        # The TradingView import page was deleted (too much upkeep for its
+        # use); the UI must not link to /tv.html anymore.
+        self.assertNotIn("tv.html", self.ui)
 
 
 if __name__ == "__main__":

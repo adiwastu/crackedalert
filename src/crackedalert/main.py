@@ -168,6 +168,44 @@ async def _run_bot(settings: Settings) -> None:
 
     trader = TradingService(clients, markets, settings)
 
+    # GET /orders data for the command-builder UI: one reconcile per
+    # account, cached so a polling page never hammers the cTrader link.
+    # Read-only: cancel/close stays on the Telegram side.
+    _orders_cache: Dict[str, object] = {"at": 0.0, "payload": None}
+    _orders_lock = asyncio.Lock()
+
+    async def orders_provider() -> dict:
+        """Working orders per account, for the UI's /orders endpoint."""
+        now = time.monotonic()
+        cached = _orders_cache
+        if now - cached["at"] < 8.0 and cached["payload"] is not None:
+            return cached["payload"]
+        async with _orders_lock:
+            now = time.monotonic()
+            if now - cached["at"] < 8.0 and cached["payload"] is not None:
+                return cached["payload"]
+            accounts = {}
+            for shortcode in settings.accounts:
+                try:
+                    rows = await trader.positions_or_orders(
+                        shortcode, is_positions=False)
+                except Exception as e:
+                    log.warning("orders fetch failed for %s: %s",
+                                shortcode, e)
+                    if isinstance(e, ct.CTraderError):
+                        msg = e.description
+                    else:
+                        msg = str(e)
+                    accounts[shortcode] = {"orders": [], "error": msg}
+                else:
+                    accounts[shortcode] = {"orders": rows, "error": None}
+            payload = {"accounts": accounts}
+            cached["at"] = time.monotonic()
+            cached["payload"] = payload
+            return payload
+
+    status_server.set_orders_provider(orders_provider)
+
     # Pending-order cc guards: params are registered here at placement time
     # (Handlers._trade) and materialized when the fill's ExecutionEvent
     # arrives on the stream. In-memory only: a restart between placement
