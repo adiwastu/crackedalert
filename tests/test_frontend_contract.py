@@ -135,6 +135,20 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn("amendCancel(", self.ui)
         self.assertIn("r.cancel_level!=null", self.ui)
 
+    def test_card_color_accents(self) -> None:
+        # v2.0.60: card 1 keeps the black buttons, card 2 (alerts +
+        # conditions) is blue, card 3 (working orders) is purple.
+        self.assertIn('id="card-trade"', self.ui)
+        self.assertIn('id="card-alert"', self.ui)
+        self.assertIn('id="card-orders"', self.ui)
+        self.assertIn("#1e4bd2", self.ui)   # card 2 blue accent
+        self.assertIn("#7b2ff7", self.ui)   # card 3 purple accent
+
+    def test_candle_tf_defaults_m5(self) -> None:
+        # Candle-close TF defaults to M5 (both the smart-SL TF and the
+        # /ccalert builder now preselect M5).
+        self.assertEqual(self.ui.count("<option selected>M5</option>"), 2)
+
     def test_no_tradingview_page_reference(self) -> None:
         # The TradingView import page was deleted (too much upkeep for its
         # use); the UI must not link to /tv.html anymore.

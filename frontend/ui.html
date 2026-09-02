@@ -27,6 +27,13 @@ button:focus-visible{outline:3px solid #ffdd00;outline-offset:-2px}
 .acct{font-weight:700;font-size:13px;margin:12px 0 2px}
 .orow{display:flex;gap:6px;align-items:center;margin-top:8px}
 .orow .cmd{flex:1;margin:0}
+/* Card 2 (alerts + conditions): blue accent buttons */
+#card-alert .seg{border-color:#1e4bd2}
+#card-alert .seg button{background:#fff;color:#1e4bd2;border-right-color:#1e4bd2}
+#card-alert .seg button.active{background:#1e4bd2;color:#fff}
+#card-alert #form-price>button,#card-alert #form-candle>button,#card-alert #form-ocancel>button{background:#1e4bd2}
+/* Card 3 (working orders): purple accent buttons */
+#card-orders button{background:#7b2ff7}
 </style>
 
 <h1>Cracked Alert <b>v__VERSION__</b></h1>
@@ -114,7 +121,7 @@ function ocancelCmd(){
 function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').textContent=candleCmd()??''; $('ocancel-cmd').textContent=ocancelCmd()??''; }
 </script>
 
-<section>
+<section id="card-trade">
   <div class="seg">
     <button class="active" onclick="seg(this,function(){S.orderType='market';$('entry-fld').style.display='none';ordReadout();});">Market</button>
     <button onclick="seg(this,function(){S.orderType='pending';$('entry-fld').style.display='';ordReadout();});">Pending</button>
@@ -138,7 +145,7 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
   <button onclick="copy(ordCmd(),$('trade-cmd'))">Copy</button>
 </section>
 
-<section>
+<section id="card-alert">
   <div class="seg" style="margin-bottom:8px">
     <button class="active" onclick="seg(this,function(){$('form-price').style.display='';$('form-candle').style.display='none';$('form-ocancel').style.display='none';});">Price</button>
     <button onclick="seg(this,function(){$('form-price').style.display='none';$('form-candle').style.display='';$('form-ocancel').style.display='none';});">Candle close</button>
@@ -152,7 +159,7 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
   </div>
   <div id="form-candle" style="display:none">
     <div class="row">
-      <div><label>TF</label><select id="cc-tf" onchange="refresh()"><option>M5</option><option>M15</option><option selected>M30</option><option>H1</option><option>H4</option><option>D1</option></select></div>
+      <div><label>TF</label><select id="cc-tf" onchange="refresh()"><option selected>M5</option><option>M15</option><option>M30</option><option>H1</option><option>H4</option><option>D1</option></select></div>
       <div><label>Dir</label><select id="cc-dir" onchange="refresh()"><option value="above">Above</option><option value="below">Below</option></select></div>
       <div><label>Symbol</label><input id="cc-sym" type="text" value="XAUUSD" oninput="refresh()"></div>
     </div>
@@ -173,7 +180,7 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
   </div>
 </section>
 
-<section>
+<section id="card-orders">
   <div class="row" style="align-items:center">
     <div style="flex:3"><b>Working orders</b> <span class="muted" id="orders-n"></span></div>
     <div style="flex:1"><button class="mini" onclick="loadOrders()">Refresh</button></div>
