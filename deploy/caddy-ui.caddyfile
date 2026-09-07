@@ -10,10 +10,17 @@ alert.hotland3x3.my.id {
 	handle /orders {
 		reverse_proxy 127.0.0.1:8190
 	}
-	# Static command-builder UI for everything else.
+	# Static command-builder UI for everything else. No-cache is deliberate:
+	# the served page carries the stamped version + alert-status token, and
+	# mobile WebViews cache aggressively, so stale copies used to keep
+	# prompting for the token even after a deploy.
 	handle {
 		root * /var/www/crackedalert-ui
 		redir / /ui.html 302
+		header {
+			Cache-Control "no-cache, no-store, must-revalidate"
+			Pragma "no-cache"
+		}
 		file_server
 	}
 }
