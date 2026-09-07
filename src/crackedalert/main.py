@@ -163,6 +163,10 @@ async def _run_bot(settings: Settings) -> None:
     for env in settings.environments_in_use():
         cli = ct.CTraderClient(env, settings.ctrader_client_id,
                                settings.ctrader_client_secret)
+        # Self-heal an expired access token: the daily refresh loop can
+        # miss the expiry window unnounced, and without this the reconnect
+        # loop would auth-reject forever (link "down", no live prices).
+        cli.set_token_refresher(tokens.refresh)
         clients[env] = cli
         markets[env] = MarketData(cli)
 

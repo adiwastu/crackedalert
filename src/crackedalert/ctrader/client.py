@@ -60,6 +60,12 @@ HEARTBEAT_INTERVAL = 8.0        # server requires <=10s
 BACKOFF_START = 1.0
 BACKOFF_CAP = 60.0
 REQUEST_TIMEOUT = 10.0
+# Refresh the access token after this many consecutive reconnect
+# failures. The token-refresh loop only runs daily, so an expired access
+# token used to leave the bot stuck in a forever-failing reconnect loop
+# ("link down", no live prices) until a manual restart. Refreshing here
+# makes that failure self-healing.
+REFRESH_AFTER_FAILURES = 5
 
 
 class CTraderError(Exception):
@@ -97,6 +103,9 @@ class CTraderClient:
         self._stopped = False
         self._runner: Optional[asyncio.Task] = None
         self._req_lock = asyncio.Lock()
+        # Called after repeated reconnect failures so an expired access
+        # token can be refreshed (see REFRESH_AFTER_FAILURES).
+        self._token_refresher: Optional[Callable[[], Awaitable[None]]] = None
         # (payloadType, clientMsgId, payload keys) of the last few frames;
         # dumped into timeout errors so a silent gateway is diagnosable.
         self._recent_frames = collections.deque(maxlen=10)
@@ -133,6 +142,12 @@ class CTraderClient:
     def set_on_connected(self, cb: Callable[[], Awaitable[None]]) -> None:
         """Late-bind the post-auth callback (wiring order convenience)."""
         self._on_connected = cb
+
+    def set_token_refresher(self, cb: Callable[[], Awaitable[None]]) -> None:
+        """Late-bind a token-refresh hook, called after repeated reconnect
+        failures so an expired access token can recover without a manual
+        service restart (the daily refresh loop alone can miss it)."""
+        self._token_refresher = cb
 
     # ------------------------------------------------------------------
     # requests
@@ -183,6 +198,7 @@ class CTraderClient:
     # ------------------------------------------------------------------
     async def _run(self) -> None:
         backoff = BACKOFF_START
+        failures = 0
         ctx = ssl.create_default_context()
         while not self._stopped:
             try:
@@ -217,6 +233,7 @@ class CTraderClient:
                             await self._with_receiver(
                                 self._on_connected(), receiver)
                         self._ready.set()
+                        failures = 0
                         log.info("[%s] ready", self.environment)
                         await receiver
                     finally:
@@ -226,8 +243,22 @@ class CTraderClient:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                failures += 1
                 log.warning("[%s] connection lost: %s: %s", self.environment,
-                           type(e).__name__, e or "(no message)")
+                            type(e).__name__, e or "(no message)")
+                # An expired access token rejects every auth attempt and the
+                # daily refresh loop may be a day away: force a refresh after
+                # a few consecutive failures so the link self-heals.
+                if (self._token_refresher is not None
+                        and failures % REFRESH_AFTER_FAILURES == 0):
+                    try:
+                        log.info("[%s] refreshing access token after %d "
+                                 "failed reconnects", self.environment,
+                                 failures)
+                        await self._token_refresher()
+                    except Exception as re:
+                        log.warning("[%s] token refresh failed: %s",
+                                    self.environment, re)
             finally:
                 self._ready.clear()
                 self._ws = None
