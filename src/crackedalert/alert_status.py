@@ -25,9 +25,16 @@ Routes (all require the ``ALERT_STATUS_TOKEN`` as ``?token=`` or the
         -> 500 {"error": "orders fetch failed"}         (provider raised)
         -> 401 {"error": "unauthorized"}
 
-    POST /ack
-        -> 200 {"ok": true}                            (clears active state)
+    POST /ack[?since=<unix_ts>]
+        -> 200 {"ok": true, "cleared": true}        (cleared active state)
+        -> 200 {"ok": true, "cleared": false}       (stale ack: a newer
+                                                     alert superseded it)
         -> 401 {"error": "unauthorized"}
+
+    The alarm app sends the alert's ``since`` timestamp with /ack. The
+    server clears only if it matches the currently-active alert, so a
+    retried/stale ack can never silence a newer alert that re-armed in
+    between (which caused "dismissed but it came back" / missed alarms).
 
 The endpoints only ever reveal the alert's text/timestamp and working
 order ids -- never cTrader credentials, balances, tokens, or chat ids.
@@ -178,8 +185,23 @@ class AlertStatusServer:
         elif method == "GET" and path == "/orders":
             await self._respond_orders(writer)
         elif method == "POST" and path == "/ack":
-            self._active.clear()
-            await self._respond(writer, 200, _json({"ok": True}))
+            # The app acks the alert it is seeing: clear only when its
+            # `since` matches the currently-active alert. A stale ack
+            # (retry, or a newer alert re-armed meanwhile) is a no-op --
+            # it must not silence an alarm the user has not dismissed.
+            ack_since = self._query_param(parsed.query, "since")
+            cleared = False
+            if self._active.active:
+                try:
+                    matches = ack_since == "" or \
+                        int(ack_since) == int(self._active.since)
+                except ValueError:
+                    matches = False
+                if matches:
+                    self._active.clear()
+                    cleared = True
+            await self._respond(
+                writer, 200, _json({"ok": True, "cleared": cleared}))
         else:
             await self._respond(writer, 404, _json({"error": "not found"}))
 

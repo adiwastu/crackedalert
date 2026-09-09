@@ -82,6 +82,12 @@ class AlertStatusEndpointTest(unittest.TestCase):
         data = self.loop.run_until_complete(_raw(self.port, payload))
         return _status(data), _body(data)
 
+    def _ack_since(self, token: str, since: int) -> tuple:
+        payload = (f"POST /ack?token={token}&since={since} HTTP/1.1\r\n"
+                   "Host: h\r\nConnection: close\r\n\r\n").encode()
+        data = self.loop.run_until_complete(_raw(self.port, payload))
+        return _status(data), _body(data)
+
     def test_idle_reports_inactive(self) -> None:
         status, body = self._get("sekrit")
         self.assertEqual(status, 200)
@@ -107,11 +113,69 @@ class AlertStatusEndpointTest(unittest.TestCase):
 
         status, body = self._ack("sekrit")
         self.assertEqual(status, 200)
-        self.assertEqual(body, {"ok": True})
+        self.assertEqual(body, {"ok": True, "cleared": True})
 
         status, body = self._get("sekrit")
         self.assertEqual(status, 200)
         self.assertEqual(body, {"active": False})
+
+    def test_ack_with_header_token(self) -> None:
+        self.active.set("SL hit for trade 42")
+        status, body = self._ack_h("sekrit")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"ok": True, "cleared": True})
+        _, b = self._get("sekrit")
+        self.assertFalse(b["active"])
+
+    def test_ack_stale_since_does_not_clear(self) -> None:
+        # A stale ack (retry, or an ack for a superseded alert) must NOT
+        # silence a newer alarm the user has not dismissed.
+        import crackedalert.alert_status as mod
+        clock = {"t": 1_000_000}
+        orig = mod.time.time
+
+        def fake_time():
+            clock["t"] += 1  # each set() lands a distinct second
+            return clock["t"]
+
+        mod.time.time = fake_time
+        try:
+            self.active.set("first alert")
+            first_since = int(self.active.since)
+            self.active.set("newer alert")
+            newer_since = int(self.active.since)
+        finally:
+            mod.time.time = orig
+        self.assertNotEqual(first_since, newer_since)
+
+        status, body = self._ack_since("sekrit", first_since)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"ok": True, "cleared": False})
+        # The newer alert is still active.
+        _, b = self._get("sekrit")
+        self.assertTrue(b["active"])
+
+        # A matching-since ack clears it.
+        status, body = self._ack_since("sekrit", newer_since)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"ok": True, "cleared": True})
+        _, b = self._get("sekrit")
+        self.assertFalse(b["active"])
+
+    def test_ack_without_since_clears_for_backward_compat(self) -> None:
+        # Old app versions ack without a `since`; treat as "clear whatever
+        # is active now" so they still work.
+        self.active.set("old-style alert")
+        status, body = self._ack("sekrit")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"ok": True, "cleared": True})
+        _, b = self._get("sekrit")
+        self.assertFalse(b["active"])
+
+    def test_ack_when_idle_returns_cleared_false(self) -> None:
+        status, body = self._ack("sekrit")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"ok": True, "cleared": False})
 
     def test_ack_requires_token(self) -> None:
         self.active.set("whatever")
@@ -139,7 +203,7 @@ class AlertStatusEndpointTest(unittest.TestCase):
         self.active.set("SL hit for trade 42")
         status, body = self._ack_h("sekrit")
         self.assertEqual(status, 200)
-        self.assertEqual(body, {"ok": True})
+        self.assertEqual(body, {"ok": True, "cleared": True})
         _, b = self._get("sekrit")
         self.assertFalse(b["active"])
 

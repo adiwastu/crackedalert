@@ -161,7 +161,10 @@ public class AlarmService extends Service {
             boolean acking = state == STATE_ACKING;
             try {
                 if (acking) {
-                    if (doAck()) {
+                    // Ack, then confirm the server really cleared before
+                    // going silent -- a 200 that raced/lost would otherwise
+                    // leave the alarm re-armed on the next poll.
+                    if (doAck() && serverIsClear()) {
                         synchronized (lock) {
                             state = STATE_IDLE;
                         }
@@ -234,19 +237,38 @@ public class AlarmService extends Service {
     /** POST /ack until success. */
     private boolean doAck() {
         try {
-            http("/ack", "POST");
+            http("/ack?since=" + since, "POST", 5_000, 5_000);
             return true;
         } catch (Exception e) {
             return false;
         }
     }
 
+    /**
+     * Confirm the server actually cleared the alert. The worker calls this
+     * right after a successful ack; a 200 that was lost/raced on the wire
+     * would otherwise leave the alarm re-armed on the next poll.
+     */
+    private boolean serverIsClear() {
+        try {
+            String body = http("/alert-status", "GET", 5_000, 5_000);
+            return !new JSONObject(body).optBoolean("active", false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private String http(String path, String method) throws Exception {
+        return http(path, method, 10_000, 10_000);
+    }
+
+    private String http(String path, String method,
+                        int connectMs, int readMs) throws Exception {
         URL u = new URL(baseUrl + path);
         HttpURLConnection c = (HttpURLConnection) u.openConnection();
         c.setRequestMethod(method);
-        c.setConnectTimeout(10_000);
-        c.setReadTimeout(10_000);
+        c.setConnectTimeout(connectMs);
+        c.setReadTimeout(readMs);
         c.setRequestProperty("X-Alert-Token", token);
         c.setRequestProperty("User-Agent", "CrackedAlarm/1.0");
         if ("POST".equals(method)) {
@@ -305,12 +327,11 @@ public class AlarmService extends Service {
     }
 
     private void stopRinging() {
-        synchronized (lock) {
-            if (state == STATE_ACKING) {
-                return; // keep ringing while the ack is still being retried
-            }
-            state = STATE_IDLE;
-        }
+        // Always tear down the alarm hardware. The old ACKING guard made
+        // stopRinging() a no-op while an ack was retrying -- and since
+        // onDestroy() also calls this, a service killed mid-ack would leave
+        // the looping player + wake lock running forever with no worker
+        // thread to stop it ("the alarm won't go away").
         if (player != null) {
             try {
                 player.stop();
@@ -327,6 +348,15 @@ public class AlarmService extends Service {
             ringLock = null;
         }
         getSystemService(NotificationManager.class).cancel(NOTIF_ALARM);
+        synchronized (lock) {
+            if (state == STATE_ACKING) {
+                // Explicit stop (FORCE_STOP / onDestroy) already handled
+                // above; leave ACKING so the worker can finish its retry.
+                // The alarm hardware is silent regardless.
+            } else {
+                state = STATE_IDLE;
+            }
+        }
         broadcast();
     }
 
