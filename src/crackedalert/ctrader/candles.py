@@ -14,7 +14,7 @@ and hands the whole thing over, one closed candle at a time.
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from ..wave import Bar
 from . import client as ct
@@ -42,13 +42,13 @@ class CandleFeed:
     """
 
     def __init__(self, cli: ct.CTraderClient, market: MarketData,
-                 account_id: int, engine,
+                 account_id: int, engines: Sequence,
                  poll_interval: float = POLL_INTERVAL,
                  history_count: int = HISTORY_COUNT):
         self._cli = cli
         self._market = market
         self._account_id = account_id
-        self._engine = engine
+        self._engines = list(engines)
         self._poll_interval = poll_interval
         self._history_count = history_count
         self._keys: Set[Tuple[str, str]] = set()
@@ -180,8 +180,25 @@ class CandleFeed:
             log.info("candle closed %s %s ts=%d o=%.5f h=%.5f l=%.5f c=%.5f",
                      symbol, timeframe, latest_ts,
                      bar.open, bar.high, bar.low, bar.close)
-            await self._engine.on_closed_bar(symbol, timeframe, bar)
+            await self._dispatch(symbol, timeframe, bar)
         self._last_ts[key] = latest_ts
+
+    async def _dispatch(self, symbol: str, timeframe: str,
+                        bar: Bar) -> None:
+        """Hand the closed bar to every engine, in order.
+
+        Each is isolated: engines do their own I/O (SQLite writes, and
+        history fetches on a cold warm-up), so one failing must not stop
+        the bar reaching the others. A bar is only delivered once, so a
+        engine that raises has missed it -- that is why the wave engine
+        persists its own progress rather than relying on redelivery.
+        """
+        for engine in self._engines:
+            try:
+                await engine.on_closed_bar(symbol, timeframe, bar)
+            except Exception:
+                log.exception("closed-bar handler failed for %s %s ts=%d",
+                              symbol, timeframe, bar.ts)
 
     @staticmethod
     def _unpack(raw: dict) -> Bar:

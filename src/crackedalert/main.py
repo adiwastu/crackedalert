@@ -31,6 +31,7 @@ from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService, TradeRejected
 from .fvg import IMBALANCE_ALERT_SPECS, candle_high, candle_low, \
     fresh_imbalance
+from .wave_state import WaveService, WaveStateStore
 
 log = logging.getLogger("crackedalert.main")
 
@@ -412,9 +413,37 @@ async def _run_bot(settings: Settings) -> None:
                                       on_close_hit=on_cc_close,
                                       on_broadcast=broadcast,
                                       on_alert_removed=_sync_candle_feed)
+    # Market structure engine. Nothing acts on its calls yet: it only
+    # logs, so the operator can compare what it reports against what
+    # they would have called by eye before anything depends on it.
+    wave_store = WaveStateStore(settings.db_file)
+
+    async def on_wave_event(event) -> None:
+        if event.kind == "doji":
+            log.info("wave doji %s %s ts=%d",
+                     event.symbol, event.timeframe, event.ts)
+            return
+        log.info("wave %s %s %s %s broke %.5f ts=%d "
+                 "(valid high %s, valid low %s)",
+                 event.kind, event.direction, event.symbol,
+                 event.timeframe, event.level, event.ts,
+                 event.valid_high, event.valid_low)
+
+    wave_service = WaveService(
+        wave_store,
+        # Late bound: candle_feed owns the fetch and is built just below.
+        # Warm-up only runs on a closed bar, long after startup wiring.
+        lambda symbol, timeframe, count: candle_feed.history(
+            symbol, timeframe, count),
+        on_event=on_wave_event)
+
+    # Candle alerts first: they are the live path, the wave engine only
+    # observes. The feed isolates each engine, so order is about
+    # latency, not safety.
     candle_feed = CandleFeed(clients[feed_account.environment],
                              markets[feed_account.environment],
-                             feed_account.ctid_account_id, candle_engine)
+                             feed_account.ctid_account_id,
+                             [candle_engine, wave_service])
 
     def make_on_connected(env: str):
         async def on_connected() -> None:
@@ -593,6 +622,7 @@ async def _run_bot(settings: Settings) -> None:
         await cli.stop()
     store.close()
     candle_store.close()
+    wave_store.close()
     subscription_store.close()
     log.info("shut down cleanly")
 

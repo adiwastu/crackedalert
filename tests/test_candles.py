@@ -18,14 +18,14 @@ def run(coro):
 
 class CandleFeedKeySyncTests(unittest.TestCase):
     def test_sync_keys_prunes_stale_keys(self):
-        feed = CandleFeed(cli=None, market=None, account_id=1, engine=None)
+        feed = CandleFeed(cli=None, market=None, account_id=1, engines=[])
         feed.add_symbol("XAUUSD", "M15")
         feed.add_symbol("EURUSD", "H1")
         feed.sync_keys([("XAUUSD", "M15")])
         self.assertEqual(feed.symbols(), {("XAUUSD", "M15")})
 
     def test_sync_keys_keeps_all_wanted(self):
-        feed = CandleFeed(cli=None, market=None, account_id=1, engine=None)
+        feed = CandleFeed(cli=None, market=None, account_id=1, engines=[])
         feed.add_symbol("XAUUSD", "M5")
         feed.add_symbol("EURUSD", "H1")
         feed.sync_keys([("xauusd", "m5"), ("EURUSD", "H1")])
@@ -67,7 +67,7 @@ class CandleFeedPollTests(unittest.TestCase):
 
         self.feed = CandleFeed(cli=mock.Mock(), market=mock.Mock(),
                                account_id=1,
-                               engine=FakeEngine(self.closed))
+                               engines=[FakeEngine(self.closed)])
 
     def test_dispatch_newest_closed_bar_not_previous(self):
         # First poll establishes the baseline latest bar (10:10 / ts 610).
@@ -93,6 +93,44 @@ class CandleFeedPollTests(unittest.TestCase):
         run(self.feed._poll_key("XAUUSD", "M5"))
         run(self.feed._poll_key("XAUUSD", "M5"))   # same frame again
         self.assertEqual(self.closed, [])
+
+
+class CandleFeedDispatchTests(unittest.TestCase):
+    """Every engine gets the bar, and one failing does not starve the rest."""
+
+    class Recorder:
+        def __init__(self):
+            self.seen = []
+
+        async def on_closed_bar(self, symbol, timeframe, bar):
+            self.seen.append(bar.ts)
+
+    class Exploder:
+        async def on_closed_bar(self, symbol, timeframe, bar):
+            raise RuntimeError("consumer down")
+
+    def _feed(self, engines):
+        feed = CandleFeed(cli=mock.Mock(), market=mock.Mock(),
+                          account_id=1, engines=engines)
+        feed._fetch_bars = mock.AsyncMock(return_value=[B600, B605, B610])
+        run(feed._poll_key("XAUUSD", "M5"))          # establish baseline
+        feed._fetch_bars = mock.AsyncMock(return_value=[B605, B610, B615])
+        run(feed._poll_key("XAUUSD", "M5"))
+        return feed
+
+    def test_every_engine_receives_the_bar(self):
+        first, second = self.Recorder(), self.Recorder()
+        self._feed([first, second])
+        self.assertEqual(first.seen, [615])
+        self.assertEqual(second.seen, [615])
+
+    def test_a_raising_engine_does_not_stop_the_others(self):
+        after = self.Recorder()
+        self._feed([self.Exploder(), after])
+        self.assertEqual(after.seen, [615])
+
+    def test_no_engines_is_not_an_error(self):
+        self._feed([])          # nothing to assert beyond not raising
 
 
 class TrendbarUnpackTests(unittest.TestCase):
@@ -126,7 +164,7 @@ class CandleFeedHistoryCountTests(unittest.TestCase):
         market.ensure_symbol = mock.AsyncMock(
             return_value=mock.Mock(symbol_id=42))
         feed = CandleFeed(cli=cli, market=market, account_id=1,
-                          engine=None, **kw)
+                          engines=[], **kw)
         return feed, cli
 
     @staticmethod
