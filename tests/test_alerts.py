@@ -15,6 +15,12 @@ def run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
+def closed_bar(close, ts):
+    """A closed bar at a given price. Candle alerts only read the close,
+    so the shape around it does not matter here."""
+    return alerts.Bar(ts=ts, open=close, high=close, low=close, close=close)
+
+
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.store = alerts.AlertStore(":memory:")
@@ -172,7 +178,7 @@ class CandleBroadcastEngineTests(unittest.TestCase):
     def test_broadcast_candle_alert_goes_to_all_not_owner(self):
         self.store.create(111, "XAUUSD", "M15", 2450.0,
                           alerts.CANDLE_ABOVE, "note", broadcast=True)
-        run(self.engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        run(self.engine.on_closed_bar("XAUUSD", "M15", closed_bar(2450.5, 100)))
         self.assertEqual(len(self.broadcast), 1)
         self.assertEqual(self.sent, [])                  # owner NOT notified
         self.assertEqual(self.store.for_chat(111), [])   # deleted
@@ -187,7 +193,7 @@ class CandleBroadcastEngineTests(unittest.TestCase):
         engine = alerts.CandleAlertEngine(
             self.store, lambda c, t: None, fmt.candle_alert_fired,
             on_broadcast=broken_broadcast)
-        run(engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        run(engine.on_closed_bar("XAUUSD", "M15", closed_bar(2450.5, 100)))
         self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
 
 
@@ -262,9 +268,9 @@ class CandleEngineTests(unittest.TestCase):
     def test_above_fires_when_close_above_target(self):
         self.store.create(111, "XAUUSD", "M15", 2450.0,
                           alerts.CANDLE_ABOVE, "note")
-        run(self.engine.on_closed_bar("XAUUSD", "M15", 2449.0, 100))
+        run(self.engine.on_closed_bar("XAUUSD", "M15", closed_bar(2449.0, 100)))
         self.assertEqual(self.sent, [])
-        run(self.engine.on_closed_bar("XAUUSD", "M15", 2450.5, 101))
+        run(self.engine.on_closed_bar("XAUUSD", "M15", closed_bar(2450.5, 101)))
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.sent[0][1], "note")   # notes-only message
         self.assertEqual(self.store.for_chat(111), [])   # deleted
@@ -272,15 +278,15 @@ class CandleEngineTests(unittest.TestCase):
     def test_below_fires_when_close_below_target(self):
         self.store.create(111, "XAUUSD", "H1", 2400.0,
                           alerts.CANDLE_BELOW, "note")
-        run(self.engine.on_closed_bar("XAUUSD", "H1", 2400.5, 100))
+        run(self.engine.on_closed_bar("XAUUSD", "H1", closed_bar(2400.5, 100)))
         self.assertEqual(self.sent, [])
-        run(self.engine.on_closed_bar("XAUUSD", "H1", 2399.5, 101))
+        run(self.engine.on_closed_bar("XAUUSD", "H1", closed_bar(2399.5, 101)))
         self.assertEqual(len(self.sent), 1)
 
     def test_other_key_untouched(self):
         self.store.create(111, "EURUSD", "M15", 1.1,
                           alerts.CANDLE_ABOVE, "x")
-        run(self.engine.on_closed_bar("XAUUSD", "M15", 2000.0, 100))
+        run(self.engine.on_closed_bar("XAUUSD", "M15", closed_bar(2000.0, 100)))
         self.assertEqual(self.sent, [])
 
     def test_guard_removal_callback_fires(self):
@@ -299,7 +305,7 @@ class CandleEngineTests(unittest.TestCase):
         self.store.create(111, "XAUUSD", "M15", 2450.0,
                           alerts.CANDLE_ABOVE, "guard",
                           action="close", position_id=42)
-        run(engine.on_closed_bar("XAUUSD", "M15", 2450.5, 101))
+        run(engine.on_closed_bar("XAUUSD", "M15", closed_bar(2450.5, 101)))
         self.assertEqual(removed, [True])
         self.assertEqual(self.store.for_key("XAUUSD", "M15"), [])
 
@@ -312,7 +318,7 @@ class CandleEngineTests(unittest.TestCase):
 
         engine = alerts.CandleAlertEngine(self.store, broken_notify,
                                           fmt.candle_alert_fired)
-        run(engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        run(engine.on_closed_bar("XAUUSD", "M15", closed_bar(2450.5, 100)))
         self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
 
 
@@ -495,7 +501,7 @@ class CandleGuardEngineTests(unittest.TestCase):
                           alerts.CANDLE_BELOW, "guard",
                           action="close", position_id=42,
                           account="demo")
-        run(self.engine.on_closed_bar("XAUUSD", "M15", 4079.0, 100))
+        run(self.engine.on_closed_bar("XAUUSD", "M15", closed_bar(4079.0, 100)))
         self.assertEqual(len(self.close_hits), 1)
         self.assertEqual(self.close_hits[0].position_id, 42)
         self.assertEqual(self.sent, [])   # no notify
@@ -516,7 +522,7 @@ class CandleGuardEngineTests(unittest.TestCase):
         engine = alerts.CandleAlertEngine(
             self.store, noop, fmt.candle_alert_fired,
             on_close_hit=broken_close)
-        run(engine.on_closed_bar("XAUUSD", "M15", 4079.0, 100))
+        run(engine.on_closed_bar("XAUUSD", "M15", closed_bar(4079.0, 100)))
         self.assertEqual(len(self.store.for_chat(111)), 1)   # retained
 
     def test_guard_not_crossed_stays(self):
@@ -524,14 +530,14 @@ class CandleGuardEngineTests(unittest.TestCase):
                           alerts.CANDLE_BELOW, "guard",
                           action="close", position_id=42,
                           account="demo")
-        run(self.engine.on_closed_bar("XAUUSD", "M15", 4081.0, 100))
+        run(self.engine.on_closed_bar("XAUUSD", "M15", closed_bar(4081.0, 100)))
         self.assertEqual(self.close_hits, [])
         self.assertEqual(len(self.store.for_chat(111)), 1)
 
     def test_notify_unaffected_by_guard(self):
         self.store.create(111, "XAUUSD", "M15", 2450.0,
                           alerts.CANDLE_ABOVE, "note")
-        run(self.engine.on_closed_bar("XAUUSD", "M15", 2450.5, 100))
+        run(self.engine.on_closed_bar("XAUUSD", "M15", closed_bar(2450.5, 100)))
         self.assertEqual(self.close_hits, [])
         self.assertEqual(len(self.sent), 1)
         self.assertEqual(self.store.for_chat(111), [])
@@ -547,7 +553,7 @@ class CandleGuardEngineTests(unittest.TestCase):
 
         engine = alerts.CandleAlertEngine(
             self.store, notify, fmt.candle_alert_fired)
-        run(engine.on_closed_bar("XAUUSD", "M15", 4079.0, 100))
+        run(engine.on_closed_bar("XAUUSD", "M15", closed_bar(4079.0, 100)))
         self.assertEqual(len(self.sent), 1)   # fell through to notify
         self.assertEqual(self.store.for_chat(111), [])
 

@@ -21,6 +21,8 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, List, Optional, Set, Tuple
 
+from .wave import Bar
+
 log = logging.getLogger("crackedalert.alerts")
 
 CROSSING_UP = "CROSSING_UP"
@@ -406,7 +408,8 @@ class CandleAlertEngine:
                 log.exception("on_alert_removed callback failed")
 
     async def on_closed_bar(self, symbol: str, timeframe: str,
-                            close: float, ts_minutes: int) -> None:
+                            bar: Bar) -> None:
+        close = bar.close
         for alert in self._store.for_key(symbol, timeframe):
             crossed = (
                 (alert.direction == CANDLE_ABOVE and close >= alert.target) or
