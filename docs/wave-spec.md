@@ -378,21 +378,72 @@ The engine has no state on a cold boot and the process restarts under
 systemd, so this runs whenever stored state cannot be resumed, not just
 the first time.
 
-1. Fetch the last N closed candles, starting with N = 100.
+1. Fetch the last 1000 closed candles.
 2. Replay the engine forwards from the oldest.
-3. If no break fired, discard the result, raise N to 300 and then 1000,
-   and rerun from the oldest candle of the larger window. Discard and
-   rerun — do not fold the extra candles onto the previous result.
-4. Stop at the first window that produces a break. Do not keep widening
-   after that. A longer window can reclassify the same break as a CHoCH
-   instead of a BOS, and the first hit is the one to trust.
-5. If a window returns fewer candles than asked for, history is
-   exhausted and a wider window cannot add anything. Stop there.
-6. If no window produces a break, keep the widest result and stay
-   undirected, watching live.
+3. Use the result. If the window contains no break, stay undirected and
+   keep watching live.
 
-State cannot be computed backwards. It is path dependent, so every pass
-replays from the start of its window.
+One wide window, not a widening scan. The gateway caps the response at
+its own chunk size rather than failing, so fewer candles than asked for
+is normal and is used as-is; log the count, because a short window is a
+quiet loss of accuracy that no error would announce.
+
+State cannot be computed backwards. It is path dependent, so the replay
+runs forwards from the start of the window.
+
+### Why not a widening scan
+
+An earlier version of this spec started at 100 candles, widened to 300
+and 1000 only if no break had fired, and stopped at the first window
+that produced one — on the reasoning that a longer window can reclassify
+the same break as a CHoCH instead of a BOS, so the first hit is the one
+to trust.
+
+The observation is true. The conclusion drawn from it was backwards, and
+this section records that so it does not get reintroduced.
+
+Warm-up is reconstructing what the engine would hold had it never
+stopped. Measured against a continuous run over synthetic series, wider
+windows match that more closely, not less:
+
+| window | same last break | same direction |
+|---|---|---|
+| 100 | 78% | 91% |
+| 300 | 97% | 99% |
+| 1000 | 100% | 100% |
+
+The reclassification a longer window performs is a **correction**, not a
+corruption. A narrow window forces its first break to BOS because no
+direction exists yet, and it arms different levels from a shorter
+history, so it can even break on different candles entirely.
+
+The practical cost of getting this wrong was not small. Strict staleness
+means warm-up runs after every session gap, so direction was being
+re-derived from a narrow window routinely rather than rarely, and
+direction is what decides BOS from CHoCH on every break that follows
+until the state converges.
+
+The wide window is also less code and the same number of requests, since
+the narrow scan's common case was already a single fetch.
+
+### How far a starting point can move the answer
+
+Worth stating plainly, because it bounds what this engine can claim.
+
+Two replays of the same candles from different starting points do
+converge, but not immediately — on synthetic series, a median of about
+30 candles and one break, with a worst case near 180 candles and nine
+breaks. Until they converge they can disagree about labels and about
+which candles broke at all.
+
+This is inherent to the definition rather than a defect. Structure is
+path dependent by construction, so "the structure" is only well defined
+relative to a history. Two observers reading the same chart from
+different scroll-back are both right.
+
+The practical consequences: a freshly warmed state is provisional until
+it has run a while, and a disagreement between the engine and a human
+eye may just be a difference of history rather than an error by either.
 
 Warm-up does not emit. Replaying history reconstructs where structure
 already stands; announcing a break that happened hours ago as though it

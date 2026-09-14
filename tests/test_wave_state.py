@@ -9,8 +9,8 @@ import asyncio
 import unittest
 
 from crackedalert.wave import BEARISH, BOS, BULLISH, Bar, new_state
-from crackedalert.wave_state import (PERIOD_MINUTES, WaveService,
-                                     WaveStateStore, resumable)
+from crackedalert.wave_state import (PERIOD_MINUTES, WARMUP_BARS,
+                                     WaveService, WaveStateStore, resumable)
 
 SYMBOL = "XAUUSD"
 TIMEFRAME = "H1"
@@ -155,67 +155,50 @@ class WarmUpTests(unittest.TestCase):
     def tearDown(self):
         self.store.close()
 
-    def _service(self, fetch, windows=(100, 300, 1000)):
-        return WaveService(self.store, fetch, windows=windows)
+    def _service(self, fetch, warmup_bars=WARMUP_BARS):
+        return WaveService(self.store, fetch, warmup_bars=warmup_bars)
 
-    def test_stops_at_the_first_window_that_breaks(self):
-        fetch = FakeFetch({100: window(BREAKING, 100)})
-        service = self._service(fetch)
-        state = run(service._warm_up(SYMBOL, TIMEFRAME))
-        self.assertEqual(fetch.calls, [100])        # did not widen
+    def test_fetches_one_wide_window_and_does_not_widen(self):
+        # A widening scan was the original design and it was wrong: a
+        # narrow window disagrees with a continuous run more often, not
+        # less, so there is nothing to escalate to.
+        fetch = FakeFetch({WARMUP_BARS: window(BREAKING, WARMUP_BARS)})
+        state = run(self._service(fetch)._warm_up(SYMBOL, TIMEFRAME))
+        self.assertEqual(fetch.calls, [WARMUP_BARS])
         self.assertEqual(state.direction, BULLISH)
 
-    def test_widens_when_the_first_window_does_not_break(self):
-        fetch = FakeFetch({100: window(QUIET, 100),
-                           300: window(BREAKING, 300)})
-        service = self._service(fetch)
-        state = run(service._warm_up(SYMBOL, TIMEFRAME))
-        self.assertEqual(fetch.calls, [100, 300])
+    def test_the_window_size_is_configurable(self):
+        fetch = FakeFetch({250: window(BREAKING, 250)})
+        state = run(self._service(fetch, warmup_bars=250)
+                    ._warm_up(SYMBOL, TIMEFRAME))
+        self.assertEqual(fetch.calls, [250])
         self.assertEqual(state.direction, BULLISH)
 
-    def test_widens_all_the_way_to_the_last_window(self):
-        fetch = FakeFetch({100: window(QUIET, 100),
-                           300: window(QUIET, 300),
-                           1000: window(BREAKING, 1000)})
-        service = self._service(fetch)
-        state = run(service._warm_up(SYMBOL, TIMEFRAME))
-        self.assertEqual(fetch.calls, [100, 300, 1000])
+    def test_the_whole_window_is_replayed_from_its_oldest_bar(self):
+        from crackedalert.wave import replay
+        bars = window(BREAKING, WARMUP_BARS)
+        state = run(self._service(FakeFetch({WARMUP_BARS: bars}))
+                    ._warm_up(SYMBOL, TIMEFRAME))
+        expected, _ = replay(bars, new_state(SYMBOL, TIMEFRAME))
+        self.assertEqual(state, expected)
+        self.assertEqual(state.last_ts, bars[-1].ts)
+
+    def test_a_truncated_window_is_used_as_is(self):
+        # The gateway caps the response at its own chunk size rather
+        # than failing, so fewer bars than asked for is normal.
+        fetch = FakeFetch({WARMUP_BARS: window(BREAKING, 40)})
+        state = run(self._service(fetch)._warm_up(SYMBOL, TIMEFRAME))
+        self.assertEqual(fetch.calls, [WARMUP_BARS])
         self.assertEqual(state.direction, BULLISH)
 
-    def test_no_break_anywhere_stays_undirected(self):
-        fetch = FakeFetch({100: window(QUIET, 100),
-                           300: window(QUIET, 300),
-                           1000: window(QUIET, 1000)})
-        service = self._service(fetch)
-        state = run(service._warm_up(SYMBOL, TIMEFRAME))
-        self.assertEqual(fetch.calls, [100, 300, 1000])
-        self.assertIsNone(state.direction)
-
-    def test_exhausted_history_stops_widening(self):
-        # Only 39 bars exist, so asking for 300 would return the same
-        # data again. One short window is enough to know that.
-        fetch = FakeFetch({100: window(QUIET, 39)})
-        service = self._service(fetch)
-        state = run(service._warm_up(SYMBOL, TIMEFRAME))
-        self.assertEqual(fetch.calls, [100])
+    def test_a_window_with_no_break_stays_undirected(self):
+        fetch = FakeFetch({WARMUP_BARS: window(QUIET, WARMUP_BARS)})
+        state = run(self._service(fetch)._warm_up(SYMBOL, TIMEFRAME))
         self.assertIsNone(state.direction)
 
     def test_no_data_at_all_leaves_a_cold_state(self):
-        fetch = FakeFetch({})
-        service = self._service(fetch)
-        state = run(service._warm_up(SYMBOL, TIMEFRAME))
+        state = run(self._service(FakeFetch({}))._warm_up(SYMBOL, TIMEFRAME))
         self.assertEqual(state, new_state(SYMBOL, TIMEFRAME))
-
-    def test_a_wider_window_is_replayed_fresh_not_layered_on_the_narrow_one(self):
-        # "Discard the result, raise N, and rerun from the oldest candle
-        # of the larger window." The state must equal a clean replay of
-        # the 300 window, with nothing carried over from the 100 scan.
-        from crackedalert.wave import replay
-        narrow, wide = window(QUIET, 100), window(BREAKING, 300)
-        service = self._service(FakeFetch({100: narrow, 300: wide}))
-        state = run(service._warm_up(SYMBOL, TIMEFRAME))
-        expected, _ = replay(wide, new_state(SYMBOL, TIMEFRAME))
-        self.assertEqual(state, expected)
 
 
 class ServiceTests(unittest.TestCase):
@@ -233,7 +216,7 @@ class ServiceTests(unittest.TestCase):
 
     def _service(self, fetch, **kw):
         return WaveService(self.store, fetch, on_event=self.on_event,
-                           windows=(100,), **kw)
+                           warmup_bars=100, **kw)
 
     def test_first_bar_with_no_stored_state_warms_up(self):
         fetch = FakeFetch({100: series(*BREAKING)})
@@ -314,7 +297,7 @@ class ServiceTests(unittest.TestCase):
 
         quiet = series(*QUIET)
         service = WaveService(self.store, FakeFetch({100: quiet}),
-                              on_event=broken, windows=(100,))
+                              on_event=broken, warmup_bars=100)
         breaker = Bar(quiet[-1].ts + PERIOD, 5, 12, 4, 11)
         run(service.on_closed_bar(SYMBOL, TIMEFRAME, breaker))
         self.assertEqual(
