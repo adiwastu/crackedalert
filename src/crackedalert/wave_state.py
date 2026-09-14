@@ -12,10 +12,11 @@ rebuild replays from the oldest bar of its window.
 
 import logging
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
-from .wave import (Bar, WaveEvent, WaveState, apply_bar, new_state,
-                   replay)
+from .wave import (BOS, CHOCH, Bar, WaveEvent, WaveState, apply_bar,
+                   new_state, replay)
 
 log = logging.getLogger("crackedalert.wave")
 
@@ -97,6 +98,32 @@ class WaveStateStore:
         self._db.commit()
 
 
+def bar_close_time(timeframe: str, ts: int,
+                   utc_offset: float = 0.0) -> Optional[str]:
+    """When the bar closed, at the given offset from UTC.
+
+    ts is the bar's OPEN: the proto defines utcTimestampInMinutes as the
+    timestamp of the open tick. The close is one period later, which on
+    H4 is four hours -- a long way to misread a log line by, and the
+    close is the moment a break actually happened.
+
+    None for a timeframe whose period is not a fixed number of minutes.
+    """
+    period = PERIOD_MINUTES.get(timeframe.upper())
+    if period is None:
+        return None
+    closed = datetime.fromtimestamp(
+        (ts + period) * 60, tz=timezone(timedelta(hours=utc_offset)))
+    return "%s %s" % (closed.strftime("%Y-%m-%d %H:%M"),
+                      _offset_label(utc_offset))
+
+
+def _offset_label(utc_offset: float) -> str:
+    if not utc_offset:
+        return "UTC"
+    return "UTC%s%g" % ("+" if utc_offset > 0 else "-", abs(utc_offset))
+
+
 def resumable(state: WaveState, next_ts: int) -> bool:
     """True only when next_ts is the bar immediately after the stored one.
 
@@ -128,11 +155,13 @@ class WaveService:
 
     def __init__(self, store: WaveStateStore, fetch: Fetch,
                  on_event: Optional[EventHandler] = None,
-                 warmup_bars: int = WARMUP_BARS):
+                 warmup_bars: int = WARMUP_BARS,
+                 utc_offset: float = 0.0):
         self._store = store
         self._fetch = fetch
         self._on_event = on_event
         self._warmup_bars = warmup_bars
+        self._utc_offset = utc_offset
         self._states: Dict[Tuple[str, str], WaveState] = {}
 
     def state(self, symbol: str, timeframe: str) -> Optional[WaveState]:
@@ -186,11 +215,34 @@ class WaveService:
             log.info("wave %s %s: warm-up found no history, staying cold",
                      symbol, timeframe)
             return new_state(symbol, timeframe)
-        state, _ = replay(bars, new_state(symbol, timeframe))
-        log.info("wave %s %s: warm-up replayed %d bars (asked %d), "
-                 "direction %s", symbol, timeframe, len(bars),
-                 self._warmup_bars, state.direction)
+        state, events = replay(bars, new_state(symbol, timeframe))
+        self._log_warm_up(symbol, timeframe, len(bars), state, events)
         return state
+
+    def _log_warm_up(self, symbol: str, timeframe: str, count: int,
+                     state: WaveState,
+                     events: Tuple[WaveEvent, ...]) -> None:
+        """Report the state warm-up inherited, including the break that
+        set the direction.
+
+        Warm-up does not emit that break as an event -- it fired hours
+        ago and announcing it would read as live -- but the operator
+        still needs to know which one the engine is working from, since
+        it decides BOS from CHoCH on everything that follows.
+        """
+        breaks = [event for event in events if event.kind in (BOS, CHOCH)]
+        if not breaks:
+            log.info("wave %s %s: warm-up replayed %d bars (asked %d), "
+                     "no break in window, staying undirected",
+                     symbol, timeframe, count, self._warmup_bars)
+            return
+        last = breaks[-1]
+        log.info("wave %s %s: warm-up replayed %d bars (asked %d), "
+                 "direction %s, last break %s %s at %.5f (%s)",
+                 symbol, timeframe, count, self._warmup_bars,
+                 state.direction, last.kind, last.direction, last.level,
+                 bar_close_time(timeframe, last.ts, self._utc_offset)
+                 or "ts=%d" % last.ts)
 
     async def _emit(self, event: WaveEvent) -> None:
         if self._on_event is None:

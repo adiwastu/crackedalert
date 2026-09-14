@@ -36,6 +36,11 @@ class Settings:
     # disables the endpoint entirely (safe default).
     alert_status_token: str = ""
     alert_status_port: int = 8190
+    # Hours from UTC for times printed in logs. Server logs stay UTC;
+    # this only affects lines meant to be read against a chart, where
+    # the operator's own clock is what matters. Fractional offsets are
+    # allowed (e.g. 5.5 for IST).
+    display_utc_offset: float = 0.0
 
     @property
     def tokens_file(self) -> str:
@@ -115,4 +120,6 @@ def load_settings() -> Settings:
         alert_status_token=os.environ.get("ALERT_STATUS_TOKEN", "").strip(),
         alert_status_port=int(
             os.environ.get("ALERT_STATUS_PORT", "8190").strip() or "8190"),
+        display_utc_offset=float(
+            os.environ.get("DISPLAY_UTC_OFFSET", "0").strip() or "0"),
     )

@@ -31,7 +31,7 @@ from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService, TradeRejected
 from .fvg import IMBALANCE_ALERT_SPECS, candle_high, candle_low, \
     fresh_imbalance
-from .wave_state import WaveService, WaveStateStore
+from .wave_state import WaveService, WaveStateStore, bar_close_time
 
 log = logging.getLogger("crackedalert.main")
 
@@ -419,14 +419,20 @@ async def _run_bot(settings: Settings) -> None:
     wave_store = WaveStateStore(settings.db_file)
 
     async def on_wave_event(event) -> None:
+        # The bar's close, in the operator's own clock: that is when the
+        # break happened, and what a chart shows. event.ts is the bar's
+        # open, a whole period earlier.
+        when = (bar_close_time(event.timeframe, event.ts,
+                               settings.display_utc_offset)
+                or "ts=%d" % event.ts)
         if event.kind == "doji":
-            log.info("wave doji %s %s ts=%d",
-                     event.symbol, event.timeframe, event.ts)
+            log.info("wave doji %s %s at %s",
+                     event.symbol, event.timeframe, when)
             return
-        log.info("wave %s %s %s %s broke %.5f ts=%d "
+        log.info("wave %s %s %s %s broke %.5f at %s "
                  "(valid high %s, valid low %s)",
                  event.kind, event.direction, event.symbol,
-                 event.timeframe, event.level, event.ts,
+                 event.timeframe, event.level, when,
                  event.valid_high, event.valid_low)
 
     wave_service = WaveService(
@@ -435,7 +441,8 @@ async def _run_bot(settings: Settings) -> None:
         # Warm-up only runs on a closed bar, long after startup wiring.
         lambda symbol, timeframe, count: candle_feed.history(
             symbol, timeframe, count),
-        on_event=on_wave_event)
+        on_event=on_wave_event,
+        utc_offset=settings.display_utc_offset)
 
     # Candle alerts first: they are the live path, the wave engine only
     # observes. The feed isolates each engine, so order is about

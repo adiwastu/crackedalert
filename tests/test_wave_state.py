@@ -6,11 +6,13 @@ warm-up logic is exercised without a gateway.
 """
 
 import asyncio
+import logging
 import unittest
 
 from crackedalert.wave import BEARISH, BOS, BULLISH, Bar, new_state
 from crackedalert.wave_state import (PERIOD_MINUTES, WARMUP_BARS,
-                                     WaveService, WaveStateStore, resumable)
+                                     WaveService, WaveStateStore,
+                                     bar_close_time, resumable)
 
 SYMBOL = "XAUUSD"
 TIMEFRAME = "H1"
@@ -116,6 +118,46 @@ class StoreTests(unittest.TestCase):
         return replay(series(*BREAKING), state)
 
 
+class BarCloseTimeTests(unittest.TestCase):
+    """ts is the bar's OPEN, so the close is one period later."""
+
+    # 2026-09-14 09:00 UTC, the H4 bar that closed at 13:00 UTC.
+    TS = 29822940
+
+    def test_close_is_one_period_after_the_open(self):
+        self.assertEqual(bar_close_time("H4", self.TS),
+                         "2026-09-14 13:00 UTC")
+
+    def test_the_period_comes_from_the_timeframe(self):
+        self.assertEqual(bar_close_time("H1", self.TS),
+                         "2026-09-14 10:00 UTC")
+        self.assertEqual(bar_close_time("M5", self.TS),
+                         "2026-09-14 09:05 UTC")
+
+    def test_a_positive_offset_shifts_and_is_labelled(self):
+        self.assertEqual(bar_close_time("H4", self.TS, 7),
+                         "2026-09-14 20:00 UTC+7")
+
+    def test_a_negative_offset_shifts_the_other_way(self):
+        self.assertEqual(bar_close_time("H4", self.TS, -5),
+                         "2026-09-14 08:00 UTC-5")
+
+    def test_a_fractional_offset_is_rendered_without_trailing_zeros(self):
+        self.assertEqual(bar_close_time("H4", self.TS, 5.5),
+                         "2026-09-14 18:30 UTC+5.5")
+
+    def test_an_offset_can_cross_the_date_boundary(self):
+        self.assertEqual(bar_close_time("H4", self.TS, 12),
+                         "2026-09-15 01:00 UTC+12")
+
+    def test_a_timeframe_with_no_fixed_period_gives_none(self):
+        self.assertIsNone(bar_close_time("MN1", self.TS))
+
+    def test_the_timeframe_is_case_insensitive(self):
+        self.assertEqual(bar_close_time("h4", self.TS),
+                         bar_close_time("H4", self.TS))
+
+
 class ResumableTests(unittest.TestCase):
     """Strict: only the immediately following bar resumes."""
 
@@ -199,6 +241,40 @@ class WarmUpTests(unittest.TestCase):
     def test_no_data_at_all_leaves_a_cold_state(self):
         state = run(self._service(FakeFetch({}))._warm_up(SYMBOL, TIMEFRAME))
         self.assertEqual(state, new_state(SYMBOL, TIMEFRAME))
+
+    def test_the_warm_up_line_names_the_break_it_inherited(self):
+        # Warm-up does not emit that break as an event, so the log line
+        # is the only place the operator can see which one the engine is
+        # working from -- and it decides BOS from CHoCH thereafter.
+        service = WaveService(
+            self.store, FakeFetch({WARMUP_BARS: window(BREAKING, WARMUP_BARS)}),
+            warmup_bars=WARMUP_BARS, utc_offset=7)
+        with self.assertLogs("crackedalert.wave", logging.INFO) as caught:
+            run(service._warm_up(SYMBOL, TIMEFRAME))
+        line = "\n".join(caught.output)
+        self.assertIn("last break", line)
+        self.assertIn("direction bullish", line)
+        self.assertIn("UTC+7", line)          # operator's clock, not UTC
+
+    def test_the_warm_up_line_says_when_no_break_was_found(self):
+        service = WaveService(
+            self.store, FakeFetch({WARMUP_BARS: window(QUIET, WARMUP_BARS)}),
+            warmup_bars=WARMUP_BARS)
+        with self.assertLogs("crackedalert.wave", logging.INFO) as caught:
+            run(service._warm_up(SYMBOL, TIMEFRAME))
+        line = "\n".join(caught.output)
+        self.assertIn("no break in window", line)
+        self.assertNotIn("last break", line)
+
+    def test_the_warm_up_line_reports_the_bars_actually_replayed(self):
+        # A truncated response is a quiet loss of accuracy, so the count
+        # asked for and the count used are both printed.
+        service = self._service(
+            FakeFetch({WARMUP_BARS: window(BREAKING, 40)}))
+        with self.assertLogs("crackedalert.wave", logging.INFO) as caught:
+            run(service._warm_up(SYMBOL, TIMEFRAME))
+        self.assertIn("replayed 40 bars (asked %d)" % WARMUP_BARS,
+                      "\n".join(caught.output))
 
 
 class ServiceTests(unittest.TestCase):
