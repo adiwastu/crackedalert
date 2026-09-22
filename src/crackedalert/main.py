@@ -545,7 +545,9 @@ async def _run_bot(settings: Settings) -> None:
         bars = sorted(
             bars, key=lambda b: int(b.get("utcTimestampInMinutes", 0) or 0))
         which = fresh_imbalance(bars)
-        verdict = {"which": which, "bars": bars, "high1": None, "low1": None}
+        verdict = {"which": which, "bars": bars, "high1": None,
+                   "low1": None,
+                   "back_to_back": which is not None and back_to_back(bars)}
         if which is not None and len(bars) >= 3:
             c1 = bars[-3]
             verdict["high1"] = candle_high(c1)
@@ -563,6 +565,13 @@ async def _run_bot(settings: Settings) -> None:
                      b.get("utcTimestampInMinutes"),
                      candle_low(b), candle_high(b))
         if which is None:
+            return
+        if verdict["back_to_back"]:
+            # The previous candle already completed one. Overlapping
+            # triplets are the same impulse, so this would broadcast and
+            # alert at near-duplicate levels a candle after the last.
+            log.info("H1 imbalance: %s, but the previous candle already "
+                     "completed one -- skipping as back to back", which)
             return
         text = "new %s imbalance on H1" % which
         log.info("H1 imbalance: %s", text)

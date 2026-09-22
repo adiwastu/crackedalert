@@ -8,8 +8,8 @@ import unittest
 
 from crackedalert.alerts import (CANDLE_ABOVE, CANDLE_BELOW,
                                  CROSSING_DOWN, CROSSING_UP)
-from crackedalert.fvg import (IMBALANCE_ALERT_SPECS, candle_high,
-                              candle_low, fresh_imbalance)
+from crackedalert.fvg import (IMBALANCE_ALERT_SPECS, back_to_back,
+                              candle_high, candle_low, fresh_imbalance)
 
 SCALE = 100000
 
@@ -111,6 +111,69 @@ class FreshImbalanceTests(unittest.TestCase):
             bar(260, 240450000, 350000),
         ]
         self.assertIsNone(fresh_imbalance(bars))
+
+
+class BackToBackTests(unittest.TestCase):
+    """Consecutive triplets overlap by two candles: one impulse, one alert."""
+
+    # Timestamps run 600/660/720/780 so both the newest triplet and
+    # the one before it are a valid H1 run (ts3 - ts1 == 120). They start
+    # off zero because fresh_imbalance treats ts 0 as a missing stamp.
+    def test_consecutive_imbalances_are_back_to_back(self):
+        bars = [
+            bar(600, 10000000, 200000),     # 100.00 / 102.00
+            bar(660, 10300000, 300000),    # 103.00 / 106.00
+            bar(720, 10400000, 400000),   # 104.00 / 108.00  gap over bar 0
+            bar(780, 10700000, 300000),   # 107.00 / 110.00  gap over bar 1
+        ]
+        self.assertEqual(fresh_imbalance(bars), "bullish")
+        self.assertTrue(back_to_back(bars))
+
+    def test_an_isolated_imbalance_is_not(self):
+        bars = [
+            bar(600, 10000000, 500000),     # 100.00 / 105.00
+            bar(660, 10100000, 500000),    # 101.00 / 106.00
+            bar(720, 10200000, 500000),   # 102.00 / 107.00  overlaps bar 0
+            bar(780, 10700000, 300000),   # 107.00 / 110.00  gap over bar 1
+        ]
+        self.assertEqual(fresh_imbalance(bars), "bullish")
+        self.assertFalse(back_to_back(bars))
+
+    def test_direction_is_not_considered(self):
+        # Previous triplet gapped down, newest gapped up. Still one
+        # impulse as far as the filter is concerned.
+        bars = [
+            bar(600, 20000000, 500000),     # 200.00 / 205.00
+            bar(660, 19000000, 500000),    # 190.00 / 195.00
+            bar(720, 18000000, 500000),   # 180.00 / 185.00  gap under bar 0
+            bar(780, 19600000, 400000),   # 196.00 / 200.00  gap over bar 1
+        ]
+        self.assertEqual(fresh_imbalance(bars), "bullish")
+        self.assertTrue(back_to_back(bars))
+
+    def test_too_few_bars_does_not_suppress(self):
+        # Three bars can show an imbalance but cannot show what came
+        # before it. Not suppressing is the safer unknown.
+        bars = [
+            bar(660, 10300000, 300000),
+            bar(720, 10400000, 400000),
+            bar(780, 10700000, 300000),
+        ]
+        self.assertEqual(fresh_imbalance(bars), "bullish")
+        self.assertFalse(back_to_back(bars))
+        self.assertFalse(back_to_back([]))
+        self.assertFalse(back_to_back(None))
+
+    def test_no_imbalance_before_means_not_back_to_back(self):
+        # Non-consecutive timestamps in the earlier triplet: not an H1
+        # run, so it cannot have completed an imbalance.
+        bars = [
+            bar(600, 10000000, 200000),
+            bar(720, 10300000, 300000),   # gap in the series
+            bar(780, 10400000, 400000),
+            bar(840, 10700000, 300000),
+        ]
+        self.assertFalse(back_to_back(bars))
 
 
 if __name__ == "__main__":

@@ -77,6 +77,26 @@ def fresh_imbalance(bars: List[dict]) -> Optional[str]:
     return None
 
 
+def back_to_back(bars: List[dict]) -> bool:
+    """True when the candle before the newest one also completed an FVG.
+
+    Consecutive triplets overlap by two candles, so a strong impulse
+    prints a fresh imbalance on every candle of it. They are the same
+    move, and alerting on each would fire near-duplicate levels several
+    candles running. Only the first is worth acting on.
+
+    Direction is not considered: an imbalance immediately following
+    another is a continuation of the same impulse whichever way the
+    second one gapped.
+
+    Needs four bars to answer. With fewer it returns False -- when the
+    answer is unknown, not suppressing is the safer default.
+    """
+    if bars is None or len(bars) < 4:
+        return False
+    return fresh_imbalance(bars[:-1]) is not None
+
+
 def _low(bar: dict) -> float:
     return int(bar.get("low", 0) or 0) / PRICE_SCALE
 

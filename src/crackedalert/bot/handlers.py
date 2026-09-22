@@ -1058,6 +1058,9 @@ class Handlers:
             lines.append("fresh %s imbalance on H1" % verdict["which"])
             lines.append("candle-1 levels: high1=%.2f low1=%.2f"
                          % (verdict["high1"], verdict["low1"]))
+            if verdict.get("back_to_back"):
+                lines.append("back to back with the previous candle -- "
+                             "the hourly check skips this one.")
         await self._reply(update, "\n".join(lines))
 
     async def cc_alert(self, update: Update,

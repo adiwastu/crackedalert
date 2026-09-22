@@ -159,7 +159,7 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
   </div>
   <div id="form-candle" style="display:none">
     <div class="row">
-      <div><label>TF</label><select id="cc-tf" onchange="refresh()"><option selected>M5</option><option>M15</option><option>M30</option><option>H1</option><option>H4</option><option>D1</option></select></div>
+      <div><label>TF</label><select id="cc-tf" onchange="refresh()"><option>M1</option><option selected>M5</option><option>M15</option><option>M30</option><option>H1</option><option>H4</option><option>D1</option></select></div>
       <div><label>Dir</label><select id="cc-dir" onchange="refresh()"><option value="above">Above</option><option value="below">Below</option></select></div>
       <div><label>Symbol</label><input id="cc-sym" type="text" value="XAUUSD" oninput="refresh()"></div>
     </div>
