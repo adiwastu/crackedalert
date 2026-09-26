@@ -13,7 +13,7 @@ which is exactly what this module checks. Bars must be consecutive
 (same timeframe) and newest-last.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from .alerts import CANDLE_ABOVE, CANDLE_BELOW, CROSSING_DOWN, CROSSING_UP
 
@@ -77,20 +77,54 @@ def fresh_imbalance(bars: List[dict]) -> Optional[str]:
     return None
 
 
+class ImbalanceGate:
+    """Decides whether a fresh imbalance should create alerts.
+
+    Consecutive triplets overlap by two candles, so one impulse prints a
+    fresh imbalance on each of its candles. Only the first earns alerts.
+
+    "First" has to mean the first this gate saw, not the first the
+    market printed. Reading it off the bars alone -- skip if the previous
+    candle also completed one -- assumed every hourly check had run on
+    fresh data. When the check for an impulse's first candle missed
+    (stale gateway data, a restart, a skipped hour), that earlier
+    imbalance was never evaluated, yet the bars still showed it, so the
+    filter skipped the only one that was: the whole impulse produced
+    nothing.
+
+    Held in memory. A restart forgets the last imbalance, so a
+    continuation straight after a restart alerts again. That is the safe
+    way to be wrong -- one duplicate rather than a silent miss.
+    """
+
+    def __init__(self) -> None:
+        self._last_seen: Optional[int] = None
+
+    @property
+    def last_seen(self) -> Optional[int]:
+        return self._last_seen
+
+    def admit(self, newest_ts: int) -> bool:
+        """Record an imbalance completing on the bar opening at newest_ts
+        (UTC minutes) and say whether it should alert."""
+        previous, self._last_seen = self._last_seen, newest_ts
+        if previous is None:
+            return True
+        if newest_ts == previous:
+            return False              # the same imbalance evaluated again
+        return newest_ts - previous != 60    # continues one we saw
+
+
 def back_to_back(bars: List[dict]) -> bool:
     """True when the candle before the newest one also completed an FVG.
 
-    Consecutive triplets overlap by two candles, so a strong impulse
-    prints a fresh imbalance on every candle of it. They are the same
-    move, and alerting on each would fire near-duplicate levels several
-    candles running. Only the first is worth acting on.
+    A fact about the market, for display (/imbalance). Do not use it to
+    decide whether to alert: the market having an imbalance on the
+    previous candle does not mean the bot alerted it. That is
+    ImbalanceGate's job.
 
-    Direction is not considered: an imbalance immediately following
-    another is a continuation of the same impulse whichever way the
-    second one gapped.
-
-    Needs four bars to answer. With fewer it returns False -- when the
-    answer is unknown, not suppressing is the safer default.
+    Direction is not considered. Needs four bars to answer; with fewer
+    it returns False.
     """
     if bars is None or len(bars) < 4:
         return False

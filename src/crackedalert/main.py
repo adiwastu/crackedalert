@@ -29,8 +29,8 @@ from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
 from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService, TradeRejected
-from .fvg import IMBALANCE_ALERT_SPECS, candle_high, candle_low, \
-    fresh_imbalance
+from .fvg import IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back, \
+    candle_high, candle_low, fresh_imbalance
 from .wave_state import WaveService, WaveStateStore, bar_close_time
 
 log = logging.getLogger("crackedalert.main")
@@ -520,6 +520,10 @@ async def _run_bot(settings: Settings) -> None:
     # full --all alert (all subscribers + the alarm app) when the newest
     # completed candle forms a fresh imbalance. One trendbar fetch/hour.
     # ------------------------------------------------------------------
+    # Remembers which imbalance the hourly check last saw, so a
+    # continuation is only skipped if its first candle was really handled.
+    imbalance_gate = ImbalanceGate()
+
     async def imbalance_verdict() -> Optional[dict]:
         """Fetch the last 3 completed H1 bars and evaluate them.
 
@@ -564,14 +568,27 @@ async def _run_bot(settings: Settings) -> None:
             log.info("  bar ts=%s low=%.5f high=%.5f",
                      b.get("utcTimestampInMinutes"),
                      candle_low(b), candle_high(b))
+        newest_ts = (int(bars[-1].get("utcTimestampInMinutes", 0) or 0)
+                     if bars else 0)
+        # The bar that just closed opened one hour before this boundary.
+        # If the gateway has not published it yet, this hour's triplet is
+        # never evaluated -- an imbalance completing on it is missed.
+        just_closed_ts = int(time.time() // 3600) * 60 - 60
+        if newest_ts < just_closed_ts:
+            log.warning("imbalance check: newest completed bar is ts=%d "
+                        "but the bar that just closed is ts=%d -- gateway "
+                        "data is stale, this hour was not evaluated",
+                        newest_ts, just_closed_ts)
         if which is None:
             return
-        if verdict["back_to_back"]:
-            # The previous candle already completed one. Overlapping
-            # triplets are the same impulse, so this would broadcast and
+        previous = imbalance_gate.last_seen
+        if not imbalance_gate.admit(newest_ts):
+            # Continues an impulse whose first imbalance this watcher
+            # already saw (or is that same imbalance again), so it would
             # alert at near-duplicate levels a candle after the last.
-            log.info("H1 imbalance: %s, but the previous candle already "
-                     "completed one -- skipping as back to back", which)
+            log.info("H1 imbalance: %s on bar ts=%d, but the one on bar "
+                     "ts=%s was already seen -- skipping as back to back",
+                     which, newest_ts, previous)
             return
         text = "new %s imbalance on H1" % which
         log.info("H1 imbalance: %s", text)

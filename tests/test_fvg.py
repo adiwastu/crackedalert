@@ -8,8 +8,9 @@ import unittest
 
 from crackedalert.alerts import (CANDLE_ABOVE, CANDLE_BELOW,
                                  CROSSING_DOWN, CROSSING_UP)
-from crackedalert.fvg import (IMBALANCE_ALERT_SPECS, back_to_back,
-                              candle_high, candle_low, fresh_imbalance)
+from crackedalert.fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate,
+                              back_to_back, candle_high, candle_low,
+                              fresh_imbalance)
 
 SCALE = 100000
 
@@ -174,6 +175,48 @@ class BackToBackTests(unittest.TestCase):
             bar(840, 10700000, 300000),
         ]
         self.assertFalse(back_to_back(bars))
+
+
+class ImbalanceGateTests(unittest.TestCase):
+    """Skip a continuation only if its first imbalance was really seen."""
+
+    def test_the_first_imbalance_alerts(self):
+        self.assertTrue(ImbalanceGate().admit(600))
+
+    def test_the_next_candle_continuing_it_is_skipped(self):
+        gate = ImbalanceGate()
+        gate.admit(600)
+        self.assertFalse(gate.admit(660))
+
+    def test_a_long_impulse_alerts_once(self):
+        gate = ImbalanceGate()
+        results = [gate.admit(ts) for ts in (600, 660, 720, 780)]
+        self.assertEqual(results, [True, False, False, False])
+
+    def test_a_missed_first_hour_still_alerts_on_the_next(self):
+        # The bug this replaces: the check for 600 never ran (stale data,
+        # restart), so the gate first sees the impulse at 660. The market
+        # had an imbalance at 600, but nothing alerted it -- this must.
+        gate = ImbalanceGate()
+        self.assertTrue(gate.admit(660))
+        self.assertFalse(gate.admit(720))
+
+    def test_the_same_imbalance_evaluated_twice_alerts_once(self):
+        gate = ImbalanceGate()
+        self.assertTrue(gate.admit(600))
+        self.assertFalse(gate.admit(600))
+
+    def test_a_gap_starts_a_new_impulse(self):
+        gate = ImbalanceGate()
+        gate.admit(600)
+        self.assertTrue(gate.admit(720))   # a candle with no imbalance between
+
+    def test_it_remembers_what_it_last_saw(self):
+        gate = ImbalanceGate()
+        self.assertIsNone(gate.last_seen)
+        gate.admit(600)
+        gate.admit(660)                    # skipped, but still seen
+        self.assertEqual(gate.last_seen, 660)
 
 
 if __name__ == "__main__":
