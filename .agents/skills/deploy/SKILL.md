@@ -30,10 +30,10 @@ ssh root@104.64.205.15
 cd ~/crackedalert
 sudo ./deploy_v2.sh
 ```
-- `deploy_v2.sh` does: `git pull origin main`, installs into the venv, runs the connection smoke test (`python -m crackedalert --smoke`), restarts the `cracked-bot` systemd service, and serves the static UI via Caddy at `http://hotland3x3.my.id/ui.html`.
+- `deploy_v2.sh` does: `git pull origin main`, installs into the venv, runs the connection smoke test (`python -m crackedalert --smoke`), restarts the `cracked-bot` systemd service, and serves the static UI via Caddy at `https://alert.hotland3x3.my.id/ui.html`.
 - If a bare pull + manual restart is preferred: `cd ~/crackedalert && git pull`, then `sudo systemctl restart cracked-bot` (after venv install). For frontend-only changes, `sudo ./deploy_v2.sh` still covers the UI copy + Caddy reload after `git pull`.
 - DB migrations (e.g. new columns) run automatically on service start — no manual migration needed.
-- Check: `systemctl status cracked-bot` and `journalctl -u cracked-bot -f`; UI check: visit `http://hotland3x3.my.id/ui.html` and confirm `ss -ltnp | grep ':80'` still shows only `caddy`.
+- Check: `systemctl status cracked-bot` and `journalctl -u cracked-bot -f`; UI check: visit `https://alert.hotland3x3.my.id/ui.html` and confirm `ss -ltnp | grep ':80'` still shows only `caddy`.
 
 ### 5. Report
 Report: (1) git commit hash + push confirmation, (2) test result, (3) whether the change is backend, frontend, or both, (4) the exact SSH deploy command.
