@@ -374,6 +374,11 @@ class CandleAlertStore:
             (symbol.upper(), timeframe.upper())).fetchall()
         return [CandleAlert(*row) for row in rows]
 
+    def exists(self, alert_id: str) -> bool:
+        return self._db.execute(
+            "SELECT 1 FROM candle_alerts WHERE id = ?",
+            (alert_id.upper(),)).fetchone() is not None
+
     def active_keys(self) -> Set[Tuple[str, str]]:
         rows = self._db.execute(
             "SELECT DISTINCT symbol, timeframe FROM candle_alerts").fetchall()

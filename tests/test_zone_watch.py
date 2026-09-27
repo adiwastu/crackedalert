@@ -49,6 +49,13 @@ class ZoneLabelTests(unittest.TestCase):
     def test_supply_is_reached_coming_up(self):
         self.assertEqual(zone_label(CROSSING_UP), "S H1")
 
+    def test_the_timeframe_comes_from_the_alert(self):
+        self.assertEqual(zone_label(CROSSING_DOWN, "M15"), "DM15")
+        self.assertEqual(zone_label(CROSSING_UP, "M15"), "S M15")
+
+    def test_zones_armed_before_the_timeframe_was_recorded_are_h1(self):
+        self.assertEqual(zone_label(CROSSING_DOWN, ""), "DH1")
+
 
 class ElapsedTests(unittest.TestCase):
     def test_formats(self):

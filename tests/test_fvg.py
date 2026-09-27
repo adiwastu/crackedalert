@@ -8,9 +8,10 @@ import unittest
 
 from crackedalert.alerts import (CANDLE_ABOVE, CANDLE_BELOW,
                                  CROSSING_DOWN, CROSSING_UP)
-from crackedalert.fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate,
-                              back_to_back, candle_high, candle_low,
-                              fresh_imbalance)
+from crackedalert.fvg import (IMBALANCE_ALERT_SPECS, NESTED_ALERT_SPECS,
+                              ImbalanceGate, back_to_back, candle_high,
+                              candle_low, fresh_imbalance, gap_bounds,
+                              just_closed_ts, overlaps, zone_name)
 
 SCALE = 100000
 
@@ -175,6 +176,78 @@ class BackToBackTests(unittest.TestCase):
             bar(840, 10700000, 300000),
         ]
         self.assertFalse(back_to_back(bars))
+
+
+class TimeframeTests(unittest.TestCase):
+    """The period is a parameter; H1 stays the default."""
+
+    M15 = [bar(600, 10000000, 200000),     # 100.00 / 102.00
+           bar(615, 10300000, 300000),
+           bar(630, 10400000, 400000)]     # 104.00 low, over bar 1's 102
+
+    def test_an_m15_triplet_needs_m15_spacing(self):
+        self.assertEqual(fresh_imbalance(self.M15, 15), "bullish")
+        self.assertIsNone(fresh_imbalance(self.M15))   # not an H1 run
+
+    def test_the_gate_uses_its_own_period(self):
+        gate = ImbalanceGate(period=15)
+        self.assertTrue(gate.admit(600))
+        self.assertFalse(gate.admit(615))
+        self.assertTrue(gate.admit(660))
+
+
+class GapBoundsTests(unittest.TestCase):
+
+    def test_bullish_runs_from_candle_1_high_to_candle_3_low(self):
+        bars = [bar(600, 10000000, 200000), bar(660, 10300000, 300000),
+                bar(720, 10400000, 400000)]
+        bottom, top = gap_bounds(bars, "bullish")
+        self.assertAlmostEqual(bottom, 102.00)
+        self.assertAlmostEqual(top, 104.00)
+
+    def test_bearish_runs_from_candle_3_high_to_candle_1_low(self):
+        bars = [bar(600, 20000000, 500000), bar(660, 19000000, 500000),
+                bar(720, 18000000, 500000)]
+        bottom, top = gap_bounds(bars, "bearish")
+        self.assertAlmostEqual(bottom, 185.00)
+        self.assertAlmostEqual(top, 200.00)
+
+
+class OverlapTests(unittest.TestCase):
+
+    def test_overlap_in_any_form(self):
+        self.assertTrue(overlaps(3, 4, 1, 10))        # inside
+        self.assertTrue(overlaps(8, 12, 1, 10))       # crosses an edge
+        self.assertTrue(overlaps(0, 20, 1, 10))       # slices through
+
+    def test_touching_or_clear_does_not(self):
+        self.assertFalse(overlaps(10, 12, 1, 10))
+        self.assertFalse(overlaps(11, 12, 1, 10))
+
+
+class NamingTests(unittest.TestCase):
+
+    def test_zone_names(self):
+        self.assertEqual(zone_name("bullish", "H1"), "DH1")
+        self.assertEqual(zone_name("bearish", "H1"), "S H1")
+        self.assertEqual(zone_name("bullish", "m15"), "DM15")
+        self.assertEqual(zone_name("bearish", "M15"), "S M15")
+
+    def test_nested_specs_match_the_h1_convention(self):
+        self.assertEqual(NESTED_ALERT_SPECS["bullish"],
+                         ("high1", CROSSING_DOWN, "masuk DM15. WATCH!"))
+        self.assertEqual(NESTED_ALERT_SPECS["bearish"],
+                         ("low1", CROSSING_UP, "masuk S M15. WATCH!"))
+
+
+class JustClosedTests(unittest.TestCase):
+
+    def test_the_bar_that_most_recently_closed(self):
+        # 10:00:05 UTC -> the H1 bar that just closed opened at 09:00.
+        now = 36000 + 5
+        self.assertEqual(just_closed_ts(now, 60), (36000 // 60) - 60)
+        # and the M15 bar that just closed opened at 09:45.
+        self.assertEqual(just_closed_ts(now, 15), (36000 // 60) - 15)
 
 
 class ImbalanceGateTests(unittest.TestCase):

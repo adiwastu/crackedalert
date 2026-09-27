@@ -31,7 +31,8 @@ from .ctrader.market import MarketData
 from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService, TradeRejected
 from .fvg import IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back, \
-    candle_high, candle_low, fresh_imbalance
+    candle_high, candle_low, fresh_imbalance, gap_bounds, just_closed_ts
+from .h1_zones import H1Zone, H1ZoneStore, NestedGate
 from .wave_state import WaveService, WaveStateStore, bar_close_time
 from .zone_watch import (WATCH_TIMEFRAMES, ZoneWatch, ZoneWatchStore,
                          zone_label)
@@ -392,8 +393,9 @@ async def _run_bot(settings: Settings) -> None:
                            utc_offset=settings.display_utc_offset)
 
     async def on_zone_touch(alert) -> None:
-        await zone_watch.on_touch(alert.symbol, zone_label(alert.direction),
-                                  alert.target)
+        await zone_watch.on_touch(
+            alert.symbol, zone_label(alert.direction, alert.cc_timeframe),
+            alert.target)
 
     engine = AlertEngine(store, notify, fmt.alert_fired,
                          on_broadcast=broadcast,
@@ -539,24 +541,22 @@ async def _run_bot(settings: Settings) -> None:
     # full --all alert (all subscribers + the alarm app) when the newest
     # completed candle forms a fresh imbalance. One trendbar fetch/hour.
     # ------------------------------------------------------------------
-    # Remembers which imbalance the hourly check last saw, so a
-    # continuation is only skipped if its first candle was really handled.
-    imbalance_gate = ImbalanceGate()
+    # Remember which imbalance each check last saw, so a continuation is
+    # only skipped if its first candle was really handled.
+    imbalance_gate = ImbalanceGate(period=60)
+    m15_nesting = NestedGate(period=15)
+    # Live H1 gaps, for M15 gaps to nest in (h1_zones.py).
+    h1_zones = H1ZoneStore(settings.db_file)
 
-    async def imbalance_verdict() -> Optional[dict]:
-        """Fetch the last 3 completed H1 bars and evaluate them.
-
-        Returns {'which': 'bullish'|'bearish'|None, 'high1': float,
-        'low1': float, 'bars': [bar...]} so callers (the hourly watcher
-        and the /imbalance debug command) share one implementation.
-        """
+    async def recent_bars(period: str) -> list:
+        """The latest completed bars on `period`, oldest first."""
         env = feed_account.environment
         info = await markets[env].ensure_symbol(
             feed_account.ctid_account_id, settings.trade_symbol)
         _, payload = await clients[env].request(ct.PT_GET_TRENDBARS_REQ, {
             "ctidTraderAccountId": feed_account.ctid_account_id,
             "symbolId": info.symbol_id,
-            "period": "H1",
+            "period": period,
             "toTimestamp": int(time.time() * 1000),
             # Ask for more than we need: the gateway counts the forming
             # candle in the limit but returns only completed bars, so
@@ -565,8 +565,28 @@ async def _run_bot(settings: Settings) -> None:
             "count": 6,
         })
         bars = payload.get("trendbar", []) or []
-        bars = sorted(
+        return sorted(
             bars, key=lambda b: int(b.get("utcTimestampInMinutes", 0) or 0))
+
+    def warn_if_stale(timeframe: str, newest_ts: int, period: int) -> None:
+        """The bar that just closed should be the newest one returned. If
+        the gateway has not published it yet, this boundary's triplet is
+        never evaluated, and an imbalance completing on it is missed."""
+        expected = just_closed_ts(time.time(), period)
+        if newest_ts < expected:
+            log.warning("%s imbalance check: newest completed bar is ts=%d "
+                        "but the bar that just closed is ts=%d -- gateway "
+                        "data is stale, this boundary was not evaluated",
+                        timeframe, newest_ts, expected)
+
+    async def imbalance_verdict() -> Optional[dict]:
+        """Fetch the last 3 completed H1 bars and evaluate them.
+
+        Returns {'which': 'bullish'|'bearish'|None, 'high1': float,
+        'low1': float, 'bars': [bar...]} so callers (the hourly watcher
+        and the /imbalance debug command) share one implementation.
+        """
+        bars = await recent_bars("H1")
         which = fresh_imbalance(bars)
         verdict = {"which": which, "bars": bars, "high1": None,
                    "low1": None,
@@ -575,6 +595,7 @@ async def _run_bot(settings: Settings) -> None:
             c1 = bars[-3]
             verdict["high1"] = candle_high(c1)
             verdict["low1"] = candle_low(c1)
+            verdict["bottom"], verdict["top"] = gap_bounds(bars, which)
         return verdict
 
     async def check_h1_imbalance() -> None:
@@ -589,15 +610,7 @@ async def _run_bot(settings: Settings) -> None:
                      candle_low(b), candle_high(b))
         newest_ts = (int(bars[-1].get("utcTimestampInMinutes", 0) or 0)
                      if bars else 0)
-        # The bar that just closed opened one hour before this boundary.
-        # If the gateway has not published it yet, this hour's triplet is
-        # never evaluated -- an imbalance completing on it is missed.
-        just_closed_ts = int(time.time() // 3600) * 60 - 60
-        if newest_ts < just_closed_ts:
-            log.warning("imbalance check: newest completed bar is ts=%d "
-                        "but the bar that just closed is ts=%d -- gateway "
-                        "data is stale, this hour was not evaluated",
-                        newest_ts, just_closed_ts)
+        warn_if_stale("H1", newest_ts, 60)
         if which is None:
             return
         previous = imbalance_gate.last_seen
@@ -620,24 +633,69 @@ async def _run_bot(settings: Settings) -> None:
             if kind == "price":
                 store.create(owner, settings.trade_symbol, level,
                              direction, note, kind=KIND_ZONE,
-                             broadcast=True)
+                             cc_timeframe="H1", broadcast=True)
             else:
-                candle_store.create(owner, settings.trade_symbol, "H1",
-                                    level, direction, note, broadcast=True)
+                flip = candle_store.create(
+                    owner, settings.trade_symbol, "H1", level, direction,
+                    note, broadcast=True)
                 candle_feed.add_symbol(settings.trade_symbol, "H1")
+                # The zone stays live exactly as long as this flip alert.
+                h1_zones.add(H1Zone(
+                    flip_alert_id=flip.id, symbol=settings.trade_symbol,
+                    which=which, bottom=verdict["bottom"],
+                    top=verdict["top"], formed_ts=newest_ts + 60))
             log.info("imbalance %s: %s alert at %.2f (%s)",
                      which, kind, level, note)
 
+    async def check_m15_imbalance() -> None:
+        """An M15 gap nested in a live H1 zone arms its own entry alert."""
+        bars = await recent_bars("M15")
+        newest_ts = (int(bars[-1].get("utcTimestampInMinutes", 0) or 0)
+                     if bars else 0)
+        warn_if_stale("M15", newest_ts, 15)
+        which = fresh_imbalance(bars, period=15)
+        if which is None:
+            return
+        previous = m15_nesting.last_seen
+        outcome, entry = m15_nesting.evaluate(
+            bars, which,
+            h1_zones.live(settings.trade_symbol, candle_store.exists))
+        if outcome == NestedGate.OUTSIDE:
+            log.info("M15 imbalance: %s is not inside a live H1 zone -- "
+                     "ignoring", which)
+            return
+        if outcome == NestedGate.CONTINUATION:
+            log.info("M15 imbalance: %s on bar ts=%d, but the one on bar "
+                     "ts=%s was already armed -- skipping as back to back",
+                     which, newest_ts, previous)
+            return
+        text = "new %s imbalance on M15, inside %s (%.2f-%.2f)" % (
+            which, entry.zone.name, entry.zone.bottom, entry.zone.top)
+        log.info("M15 imbalance: %s", text)
+        await broadcast(text)
+        store.create(settings.allowed_chat_ids[0], settings.trade_symbol,
+                     entry.level, entry.direction, entry.note,
+                     kind=KIND_ZONE, cc_timeframe="M15", broadcast=True)
+        log.info("imbalance M15 %s: price alert at %.2f (%s)",
+                 which, entry.level, entry.note)
+
     async def imbalance_watcher() -> None:
-        """Check shortly after every UTC hour boundary."""
+        """Check shortly after every 15-minute boundary: H1 on the hour,
+        then M15. H1 goes first so a zone formed on this boundary is on
+        record before M15 gaps are matched against zones."""
         while True:
             now = time.time()
-            next_hour = (int(now // 3600) + 1) * 3600
-            await asyncio.sleep(next_hour - now + 5)
+            boundary = (int(now // 900) + 1) * 900
+            await asyncio.sleep(boundary - now + 5)
+            if boundary % 3600 == 0:
+                try:
+                    await check_h1_imbalance()
+                except Exception:
+                    log.exception("H1 imbalance check failed")
             try:
-                await check_h1_imbalance()
+                await check_m15_imbalance()
             except Exception:
-                log.exception("H1 imbalance check failed")
+                log.exception("M15 imbalance check failed")
 
     imbalance_task = asyncio.get_running_loop().create_task(
         imbalance_watcher())
@@ -677,6 +735,7 @@ async def _run_bot(settings: Settings) -> None:
     candle_store.close()
     wave_store.close()
     zone_store.close()
+    h1_zones.close()
     subscription_store.close()
     log.info("shut down cleanly")
 

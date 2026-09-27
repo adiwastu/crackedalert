@@ -13,7 +13,7 @@ which is exactly what this module checks. Bars must be consecutive
 (same timeframe) and newest-last.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .alerts import CANDLE_ABOVE, CANDLE_BELOW, CROSSING_DOWN, CROSSING_UP
 
@@ -39,6 +39,20 @@ IMBALANCE_ALERT_SPECS: dict = {
     ),
 }
 
+# An M15 imbalance nested in a live H1 zone arms one alert: entry at its
+# own candle 1, the same way round as the H1 entry. No flip of its own --
+# the H1 zone it sits in already carries one. Each entry:
+# (candle-1 level to watch, alert direction, note).
+NESTED_ALERT_SPECS: dict = {
+    "bullish": ("high1", CROSSING_DOWN, "masuk DM15. WATCH!"),
+    "bearish": ("low1", CROSSING_UP, "masuk S M15. WATCH!"),
+}
+
+
+def zone_name(which: str, timeframe: str) -> str:
+    """DH1 / S H1, DM15 / S M15: a bullish gap is demand, bearish supply."""
+    return ("D%s" if which == "bullish" else "S %s") % timeframe.upper()
+
 
 def candle_high(bar: dict) -> float:
     """Absolute high of one completed trendbar."""
@@ -50,11 +64,13 @@ def candle_low(bar: dict) -> float:
     return _low(bar)
 
 
-def fresh_imbalance(bars: List[dict]) -> Optional[str]:
+def fresh_imbalance(bars: List[dict], period: int = 60) -> Optional[str]:
     """Return 'bullish' or 'bearish' when the newest of the last three
     completed trendbars completes an FVG, else None.
 
-    Each bar needs 'utcTimestampInMinutes', 'low' and 'deltaHigh'.
+    period is the timeframe in minutes; the three bars must be exactly
+    one period apart. Each bar needs 'utcTimestampInMinutes', 'low' and
+    'deltaHigh'.
     """
     if bars is None or len(bars) < 3:
         return None
@@ -62,7 +78,7 @@ def fresh_imbalance(bars: List[dict]) -> Optional[str]:
 
     ts1 = int(c1.get("utcTimestampInMinutes", 0) or 0)
     ts3 = int(c3.get("utcTimestampInMinutes", 0) or 0)
-    if ts1 <= 0 or ts3 - ts1 != 2 * 60:      # H1: two 60-min steps apart
+    if ts1 <= 0 or ts3 - ts1 != 2 * period:
         return None
 
     h1 = _high(c1)
@@ -75,6 +91,32 @@ def fresh_imbalance(bars: List[dict]) -> Optional[str]:
     if h3 < l1:
         return "bearish"
     return None
+
+
+def gap_bounds(bars: List[dict], which: str) -> Tuple[float, float]:
+    """(bottom, top) of the gap the newest triplet left, for an FVG
+    already known to be `which`: bullish (c1.high, c3.low), bearish
+    (c3.high, c1.low)."""
+    c1, c3 = bars[-3], bars[-1]
+    if which == "bullish":
+        return _high(c1), _low(c3)
+    return _high(c3), _low(c1)
+
+
+def overlaps(bottom: float, top: float,
+             other_bottom: float, other_top: float) -> bool:
+    """True when two price ranges share any interior: one inside the
+    other, crossing an edge, or slicing through. Strict, like every other
+    comparison here -- ranges that only touch at an edge do not overlap."""
+    return bottom < other_top and top > other_bottom
+
+
+def just_closed_ts(now: float, period: int) -> int:
+    """UTC-minute open of the bar that most recently closed, at `now`
+    (unix seconds). A check running just after a boundary should find
+    this bar as its newest; if it does not, the gateway has not published
+    it yet."""
+    return int(now // (period * 60)) * period - period
 
 
 class ImbalanceGate:
@@ -97,7 +139,8 @@ class ImbalanceGate:
     way to be wrong -- one duplicate rather than a silent miss.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, period: int = 60) -> None:
+        self._period = period
         self._last_seen: Optional[int] = None
 
     @property
@@ -112,10 +155,10 @@ class ImbalanceGate:
             return True
         if newest_ts == previous:
             return False              # the same imbalance evaluated again
-        return newest_ts - previous != 60    # continues one we saw
+        return newest_ts - previous != self._period    # continues one we saw
 
 
-def back_to_back(bars: List[dict]) -> bool:
+def back_to_back(bars: List[dict], period: int = 60) -> bool:
     """True when the candle before the newest one also completed an FVG.
 
     A fact about the market, for display (/imbalance). Do not use it to
@@ -128,7 +171,7 @@ def back_to_back(bars: List[dict]) -> bool:
     """
     if bars is None or len(bars) < 4:
         return False
-    return fresh_imbalance(bars[:-1]) is not None
+    return fresh_imbalance(bars[:-1], period) is not None
 
 
 def _low(bar: dict) -> float:

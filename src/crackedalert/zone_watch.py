@@ -15,6 +15,7 @@ import time
 from typing import Awaitable, Callable, Dict, Optional, Sequence, Tuple
 
 from .alerts import CROSSING_DOWN
+from .fvg import zone_name
 from .wave import BOS, CHOCH, WaveEvent
 from .wave_state import PERIOD_MINUTES, bar_close_time
 
@@ -35,11 +36,13 @@ Broadcast = Callable[[str], Awaitable[None]]
 Watch = Tuple[str, float, int]          # label, zone level, touched at (s)
 
 
-def zone_label(direction: str) -> str:
-    """DH1 is demand, reached by price coming down into it; S H1 is
-    supply, reached coming up. The FVG watcher arms them that way round
-    (see IMBALANCE_ALERT_SPECS)."""
-    return "DH1" if direction == CROSSING_DOWN else "S H1"
+def zone_label(direction: str, timeframe: str = "H1") -> str:
+    """Demand is reached by price coming down into it, supply coming up;
+    the FVG watchers arm them that way round. A zone alert's timeframe
+    rides in its cc_timeframe, and zones armed before it was recorded
+    are H1, so an empty timeframe means H1."""
+    return zone_name("bullish" if direction == CROSSING_DOWN else "bearish",
+                     timeframe or "H1")
 
 
 class ZoneWatchStore:
