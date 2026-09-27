@@ -24,6 +24,20 @@ class CandleFeedKeySyncTests(unittest.TestCase):
         feed.sync_keys([("XAUUSD", "M15")])
         self.assertEqual(feed.symbols(), {("XAUUSD", "M15")})
 
+    def test_pinned_keys_survive_sync(self):
+        # The wave engine stopped seeing a timeframe once the last candle
+        # alert on it cleared. Pinned keys are never pruned.
+        feed = CandleFeed(cli=None, market=None, account_id=1, engines=[])
+        feed.pin("xauusd", "m5")
+        feed.add_symbol("XAUUSD", "H1")
+        feed.sync_keys([])
+        self.assertEqual(feed.symbols(), {("XAUUSD", "M5")})
+
+    def test_pinning_starts_polling_the_key(self):
+        feed = CandleFeed(cli=None, market=None, account_id=1, engines=[])
+        feed.pin("XAUUSD", "M5")
+        self.assertIn(("XAUUSD", "M5"), feed.symbols())
+
     def test_sync_keys_keeps_all_wanted(self):
         feed = CandleFeed(cli=None, market=None, account_id=1, engines=[])
         feed.add_symbol("XAUUSD", "M5")

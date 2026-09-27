@@ -31,6 +31,12 @@ ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 # alert kinds (legacy 'entry'/'tp'/'sl' rows are purged at startup)
 KIND_MANUAL = "manual"
+# A DH1 / S H1 zone armed by the FVG watcher. Fires like any --all price
+# alert, and additionally opens a zone watch (zone_watch.py).
+KIND_ZONE = "zone"
+# Kinds from the removed trade auto-alert chain. Purged by name, never by
+# "anything but manual", which would also delete every newer kind.
+LEGACY_KINDS = ("entry", "tp", "sl")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS alerts (
@@ -96,8 +102,9 @@ class AlertStore:
                     "ALTER TABLE alerts ADD COLUMN %s %s" % (col, ddl))
         # v2.0.31: the trade auto-alert chain is gone -- drop any legacy
         # entry/tp/sl rows so they can never fire again.
-        cur = self._db.execute("DELETE FROM alerts WHERE kind != ?",
-                               (KIND_MANUAL,))
+        cur = self._db.execute(
+            "DELETE FROM alerts WHERE kind IN (%s)"
+            % ", ".join("?" * len(LEGACY_KINDS)), LEGACY_KINDS)
         if cur.rowcount:
             log.info("purged %d legacy auto trade alert(s)", cur.rowcount)
 
@@ -187,11 +194,14 @@ class AlertEngine:
 
     def __init__(self, store: AlertStore, notify: Notifier,
                  format_fired: Formatter,
-                 on_broadcast: Optional[Broadcaster] = None):
+                 on_broadcast: Optional[Broadcaster] = None,
+                 on_zone_touch: Optional[
+                     Callable[[Alert], Awaitable[None]]] = None):
         self._store = store
         self._notify = notify
         self._format = format_fired
         self._on_broadcast = on_broadcast
+        self._on_zone_touch = on_zone_touch
 
     async def on_tick(self, symbol: str, bid: float, ask: float) -> None:
         mid = (bid + ask) / 2.0
@@ -201,12 +211,21 @@ class AlertEngine:
                 (alert.direction == CROSSING_DOWN and mid <= alert.target))
             if not crossed:
                 continue
-            log.info("alert %s fired: %s crossed %s (mid %.5f)",
-                     alert.id, alert.symbol, alert.target, mid)
+            log.info("alert %s fired: %s crossed %s (mid %.5f) -- %s",
+                     alert.id, alert.symbol, alert.target, mid,
+                     alert.message)
             if alert.broadcast:
                 await self._fire_broadcast(alert)
             else:  # KIND_MANUAL
                 await self._fire_manual(alert)
+            if alert.kind == KIND_ZONE and self._on_zone_touch is not None:
+                # After the alert's own message, so the zone line reads
+                # first. Isolated: a watch failing must not affect alerts.
+                try:
+                    await self._on_zone_touch(alert)
+                except Exception:
+                    log.exception("zone touch handler failed for alert %s",
+                                  alert.id)
 
     async def _fire_manual(self, alert: Alert) -> None:
         try:

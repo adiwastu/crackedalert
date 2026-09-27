@@ -17,7 +17,8 @@ from telegram.constants import ParseMode
 from telegram.ext import Application
 
 from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
-                     CandleAlertStore, CANDLE_ABOVE, CANDLE_BELOW)
+                     CandleAlertStore, CANDLE_ABOVE, CANDLE_BELOW,
+                     KIND_ZONE)
 from .alert_status import ActiveAlert, AlertStatusServer
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
@@ -32,6 +33,8 @@ from .ctrader.trading import TradingService, TradeRejected
 from .fvg import IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back, \
     candle_high, candle_low, fresh_imbalance
 from .wave_state import WaveService, WaveStateStore, bar_close_time
+from .zone_watch import (WATCH_TIMEFRAMES, ZoneWatch, ZoneWatchStore,
+                         zone_label)
 
 log = logging.getLogger("crackedalert.main")
 
@@ -382,8 +385,19 @@ async def _run_bot(settings: Settings) -> None:
     for _env, cli in clients.items():
         cli.add_event_handler(ct.PT_EXECUTION_EVENT, on_execution)
 
+    # After a DH1 / S H1 zone is touched, broadcast every break on the
+    # watched timeframes until the first CHoCH.
+    zone_store = ZoneWatchStore(settings.db_file)
+    zone_watch = ZoneWatch(zone_store, broadcast,
+                           utc_offset=settings.display_utc_offset)
+
+    async def on_zone_touch(alert) -> None:
+        await zone_watch.on_touch(alert.symbol, zone_label(alert.direction),
+                                  alert.target)
+
     engine = AlertEngine(store, notify, fmt.alert_fired,
-                         on_broadcast=broadcast)
+                         on_broadcast=broadcast,
+                         on_zone_touch=on_zone_touch)
     feed = FeedService(markets[feed_account.environment],
                        feed_account.ctid_account_id, engine)
     markets[feed_account.environment].add_tick_listener(feed.on_tick)
@@ -434,6 +448,7 @@ async def _run_bot(settings: Settings) -> None:
                  event.kind, event.direction, event.symbol,
                  event.timeframe, event.level, when,
                  event.valid_high, event.valid_low)
+        await zone_watch.on_wave_event(event)
 
     wave_service = WaveService(
         wave_store,
@@ -451,6 +466,10 @@ async def _run_bot(settings: Settings) -> None:
                              markets[feed_account.environment],
                              feed_account.ctid_account_id,
                              [candle_engine, wave_service])
+    # Zone watches need structure on these timeframes whether or not any
+    # candle alert happens to be using them.
+    for timeframe in WATCH_TIMEFRAMES:
+        candle_feed.pin(settings.trade_symbol, timeframe)
 
     def make_on_connected(env: str):
         async def on_connected() -> None:
@@ -600,7 +619,8 @@ async def _run_bot(settings: Settings) -> None:
             level = verdict[level_key]
             if kind == "price":
                 store.create(owner, settings.trade_symbol, level,
-                             direction, note, broadcast=True)
+                             direction, note, kind=KIND_ZONE,
+                             broadcast=True)
             else:
                 candle_store.create(owner, settings.trade_symbol, "H1",
                                     level, direction, note, broadcast=True)
@@ -656,6 +676,7 @@ async def _run_bot(settings: Settings) -> None:
     store.close()
     candle_store.close()
     wave_store.close()
+    zone_store.close()
     subscription_store.close()
     log.info("shut down cleanly")
 

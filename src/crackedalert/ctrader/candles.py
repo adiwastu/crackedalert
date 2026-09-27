@@ -52,6 +52,7 @@ class CandleFeed:
         self._poll_interval = poll_interval
         self._history_count = history_count
         self._keys: Set[Tuple[str, str]] = set()
+        self._pinned: Set[Tuple[str, str]] = set()
         self._last_ts: Dict[Tuple[str, str], int] = {}
         self._last_close: Dict[Tuple[str, str], Optional[float]] = {}
         self._task: Optional[asyncio.Task] = None
@@ -66,11 +67,25 @@ class CandleFeed:
     def remove_symbol(self, symbol: str, timeframe: str) -> None:
         self._keys.discard((symbol.upper(), timeframe.upper()))
 
+    def pin(self, symbol: str, timeframe: str) -> None:
+        """Poll a key permanently, whatever the candle-alert store holds.
+
+        sync_keys prunes the feed back to what candle alerts need, which
+        is right for them but starves every other engine: the wave engine
+        stopped seeing a timeframe the moment its last candle alert
+        cleared, with nothing in the log to say so.
+        """
+        key = (symbol.upper(), timeframe.upper())
+        self._pinned.add(key)
+        self._keys.add(key)
+
     def sync_keys(self, wanted) -> None:
         """Keep only the (symbol, timeframe) keys that are still wanted
-        (from the candle-alert store). Stops polling stale keys after
-        guards fire, get cancelled, or their position closes."""
-        self._keys &= {(str(s).upper(), str(t).upper()) for s, t in wanted}
+        (from the candle-alert store), plus anything pinned. Stops polling
+        stale keys after guards fire, get cancelled, or their position
+        closes."""
+        self._keys = ({(str(s).upper(), str(t).upper()) for s, t in wanted}
+                      & self._keys) | self._pinned
 
     def symbols(self) -> set:
         return set(self._keys)

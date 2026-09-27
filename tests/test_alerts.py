@@ -600,5 +600,97 @@ class AlertStoreGuardFieldTests(unittest.TestCase):
             s.close()
 
 
+class ZoneTouchTests(unittest.TestCase):
+    """A zone alert fires like any --all alert and also opens a watch."""
+
+    def setUp(self):
+        self.store = alerts.AlertStore(":memory:")
+        self.broadcast = []
+        self.touched = []
+
+        async def broadcast(text):
+            self.broadcast.append(text)
+
+        async def on_zone_touch(alert):
+            self.touched.append(alert)
+
+        self.engine = alerts.AlertEngine(
+            self.store, lambda c, t: None, fmt.alert_fired,
+            on_broadcast=broadcast, on_zone_touch=on_zone_touch)
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_a_zone_alert_firing_opens_a_watch(self):
+        self.store.create(111, "XAUUSD", 4282.55, alerts.CROSSING_DOWN,
+                          "masuk DH1. WATCH!", kind=alerts.KIND_ZONE,
+                          broadcast=True)
+        run(self.engine.on_tick("XAUUSD", 4282.0, 4282.2))
+        [alert] = self.touched
+        self.assertEqual((alert.symbol, alert.target, alert.direction),
+                         ("XAUUSD", 4282.55, alerts.CROSSING_DOWN))
+        self.assertEqual(len(self.broadcast), 1)          # still broadcast
+        self.assertEqual(self.store.for_chat(111), [])    # still deleted
+
+    def test_a_manual_alert_firing_does_not(self):
+        self.store.create(111, "XAUUSD", 4282.55, alerts.CROSSING_DOWN,
+                          "masuk DH1. WATCH!", broadcast=True)
+        run(self.engine.on_tick("XAUUSD", 4282.0, 4282.2))
+        self.assertEqual(self.touched, [])
+        self.assertEqual(len(self.broadcast), 1)
+
+    def test_a_failing_watch_does_not_affect_the_alert(self):
+        async def broken(alert):
+            raise RuntimeError("watch down")
+
+        engine = alerts.AlertEngine(
+            self.store, lambda c, t: None, fmt.alert_fired,
+            on_broadcast=lambda t: asyncio.sleep(0),
+            on_zone_touch=broken)
+        self.store.create(111, "XAUUSD", 4282.55, alerts.CROSSING_DOWN,
+                          "masuk DH1. WATCH!", kind=alerts.KIND_ZONE,
+                          broadcast=True)
+        run(engine.on_tick("XAUUSD", 4282.0, 4282.2))
+        self.assertEqual(self.store.for_chat(111), [])
+
+
+class StartupPurgeTests(unittest.TestCase):
+    """The purge must remove legacy trade kinds and nothing newer."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "alerts.db")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _reopen(self):
+        return alerts.AlertStore(self.path)
+
+    def test_zone_alerts_survive_a_restart(self):
+        # "Delete anything that is not manual" would wipe every armed
+        # zone on every deploy.
+        s = self._reopen()
+        s.create(111, "XAUUSD", 4282.55, alerts.CROSSING_DOWN,
+                 "masuk DH1. WATCH!", kind=alerts.KIND_ZONE, broadcast=True)
+        s.close()
+        s = self._reopen()
+        [row] = s.for_chat(111)
+        self.assertEqual(row.kind, alerts.KIND_ZONE)
+        s.close()
+
+    def test_legacy_trade_kinds_are_still_purged(self):
+        s = self._reopen()
+        for kind in alerts.LEGACY_KINDS:
+            s.create(111, "XAUUSD", 4282.55, alerts.CROSSING_DOWN, kind,
+                     kind=kind)
+        s.create(111, "XAUUSD", 4300.0, alerts.CROSSING_UP, "keep me")
+        s.close()
+        s = self._reopen()
+        self.assertEqual([r.message for r in s.for_chat(111)], ["keep me"])
+        s.close()
+
+
 if __name__ == "__main__":
     unittest.main()
