@@ -603,6 +603,21 @@ class InvariantTests(unittest.TestCase):
                 self.assertEqual(state.valid_low is None,
                                  state.window_high is None)
 
+    def test_the_choch_level_is_always_armed_while_a_direction_holds(self):
+        # Bullish, a close below valid_low is the CHoCH; bearish, a close
+        # above valid_high. Only that CHoCH can disarm the level, and it
+        # flips the direction as it does, so the level a zone watch names
+        # can never be missing while its direction stands.
+        rng = random.Random(13)
+        for _ in range(300):
+            state = new_state(SYMBOL, TIMEFRAME)
+            for bar in self._random_bars(rng, 60):
+                state, _ = apply_bar(state, bar)
+                if state.direction == BULLISH:
+                    self.assertIsNotNone(state.valid_low)
+                elif state.direction == BEARISH:
+                    self.assertIsNotNone(state.valid_high)
+
     def test_a_move_is_always_live_after_the_first_bar(self):
         # Seeding can only happen when there is no move at all, so if
         # both slots ever emptied, a later bar would silently reseed.

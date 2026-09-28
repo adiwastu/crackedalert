@@ -6,9 +6,11 @@ import os
 import shutil
 import tempfile
 import unittest
+from dataclasses import replace
 
 from crackedalert.alerts import CROSSING_DOWN, CROSSING_UP
-from crackedalert.wave import BEARISH, BOS, BULLISH, CHOCH, DOJI, WaveEvent
+from crackedalert.wave import (BEARISH, BOS, BULLISH, CHOCH, DOJI,
+                               WaveEvent, new_state)
 from crackedalert.zone_watch import (ZoneWatch, ZoneWatchStore, _elapsed,
                                      zone_label)
 
@@ -169,6 +171,69 @@ class ZoneWatchTests(unittest.TestCase):
         run(watch.on_wave_event(event(CHOCH)))
         self.assertIsNone(watch.watching(SYMBOL))
         self.assertEqual(self.store.load(), {})
+
+
+class ChochLevelTests(unittest.TestCase):
+    """The watch says where the CHoCH that ends it sits, and keeps it
+    current as BOSes move it."""
+
+    def setUp(self):
+        self.store = ZoneWatchStore(":memory:")
+        self.sent = Sent()
+
+    def tearDown(self):
+        self.store.close()
+
+    def touch_with(self, state):
+        watch = ZoneWatch(self.store, self.sent, clock=lambda: TOUCHED_AT,
+                          structure=lambda symbol, tf: state)
+        run(watch.on_touch(SYMBOL, "S H1", 4136.54))
+        return watch
+
+    def state(self, direction, valid_high=None, valid_low=None):
+        return replace(new_state(SYMBOL, "M5"), direction=direction,
+                       valid_high=valid_high, valid_low=valid_low)
+
+    def test_bearish_structure_names_the_close_above(self):
+        self.touch_with(self.state(BEARISH, valid_high=4142.1,
+                                   valid_low=None))
+        self.assertTrue(self.sent.lines[-1].endswith(
+            "M5 is bearish: CHoCH on a close above 4142.1."))
+
+    def test_bullish_structure_names_the_close_below(self):
+        self.touch_with(self.state(BULLISH, valid_high=None,
+                                   valid_low=4128.35))
+        self.assertTrue(self.sent.lines[-1].endswith(
+            "M5 is bullish: CHoCH on a close below 4128.35."))
+
+    def test_no_direction_yet_says_there_is_no_choch_to_name(self):
+        self.touch_with(self.state(None, valid_high=4142.1))
+        self.assertIn("M5 has no direction yet", self.sent.lines[-1])
+
+    def test_structure_not_primed_yet_says_so(self):
+        self.touch_with(None)
+        self.assertIn("M5 structure is still warming up",
+                      self.sent.lines[-1])
+
+    def test_a_bos_announces_the_moved_choch_level(self):
+        # A bearish BOS commits a new valid high from its window; that is
+        # the new close-above that would CHoCH.
+        watch = self.touch_with(self.state(BEARISH, valid_high=4142.1))
+        run(watch.on_wave_event(WaveEvent(
+            kind=BOS, symbol=SYMBOL, timeframe="M5", ts=OPEN,
+            direction=BEARISH, level=4130.0, valid_high=4138.2,
+            valid_low=None)))
+        self.assertTrue(self.sent.lines[-1].endswith(
+            "CHoCH now on a close above 4138.2."))
+
+    def test_the_choch_line_does_not_announce_a_next_level(self):
+        watch = self.touch_with(self.state(BEARISH, valid_high=4142.1))
+        run(watch.on_wave_event(WaveEvent(
+            kind=CHOCH, symbol=SYMBOL, timeframe="M5", ts=OPEN,
+            direction=BULLISH, level=4142.1, valid_high=None,
+            valid_low=4125.0)))
+        self.assertTrue(self.sent.lines[-1].endswith("Watch ended."))
+        self.assertNotIn("CHoCH now", self.sent.lines[-1])
 
 
 class ZoneWatchRestartTests(unittest.TestCase):

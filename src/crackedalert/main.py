@@ -389,8 +389,11 @@ async def _run_bot(settings: Settings) -> None:
     # After a DH1 / S H1 zone is touched, broadcast every break on the
     # watched timeframes until the first CHoCH.
     zone_store = ZoneWatchStore(settings.db_file)
-    zone_watch = ZoneWatch(zone_store, broadcast,
-                           utc_offset=settings.display_utc_offset)
+    zone_watch = ZoneWatch(
+        zone_store, broadcast, utc_offset=settings.display_utc_offset,
+        # Late bound: wave_service is built below. Only read on a touch.
+        structure=lambda symbol, timeframe: wave_service.state(
+            symbol, timeframe))
 
     async def on_zone_touch(alert) -> None:
         await zone_watch.on_touch(

@@ -16,7 +16,7 @@ from typing import Awaitable, Callable, Dict, Optional, Sequence, Tuple
 
 from .alerts import CROSSING_DOWN
 from .fvg import zone_name
-from .wave import BOS, CHOCH, WaveEvent
+from .wave import BEARISH, BOS, BULLISH, CHOCH, WaveEvent, WaveState
 from .wave_state import PERIOD_MINUTES, bar_close_time
 
 log = logging.getLogger("crackedalert.zone")
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS zone_watch (
 """
 
 Broadcast = Callable[[str], Awaitable[None]]
+Structure = Callable[[str, str], Optional[WaveState]]
 Watch = Tuple[str, float, int]          # label, zone level, touched at (s)
 
 
@@ -86,12 +87,16 @@ class ZoneWatch:
     def __init__(self, store: ZoneWatchStore, broadcast: Broadcast,
                  utc_offset: float = 0.0,
                  timeframes: Sequence[str] = WATCH_TIMEFRAMES,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time,
+                 structure: Optional[Structure] = None):
         self._store = store
         self._broadcast = broadcast
         self._utc_offset = utc_offset
         self._timeframes = tuple(tf.upper() for tf in timeframes)
         self._clock = clock
+        # Current wave state for (symbol, timeframe), to say where the
+        # CHoCH that ends a watch sits. None until that key has primed.
+        self._structure = structure
         self._watches: Dict[str, Watch] = store.load()
         for symbol, (label, _, _) in self._watches.items():
             log.info("zone watch resumed: %s %s", symbol, label)
@@ -106,10 +111,14 @@ class ZoneWatch:
         self._store.start(symbol, label, level, touched_at)
         log.info("zone watch opened: %s %s at %s", symbol, label,
                  _price(level))
-        await self._send(
-            "%s touched on %s at %s -- watching %s structure until the "
-            "first CHoCH." % (label, symbol, _price(level),
-                              "/".join(self._timeframes)))
+        text = ("%s touched on %s at %s -- watching %s structure until the "
+                "first CHoCH." % (label, symbol, _price(level),
+                                  "/".join(self._timeframes)))
+        if self._structure is not None:
+            for timeframe in self._timeframes:
+                text += " " + _where_choch(
+                    timeframe, self._structure(symbol, timeframe))
+        await self._send(text)
 
     async def on_wave_event(self, event: WaveEvent) -> None:
         symbol = event.symbol.upper()
@@ -130,18 +139,55 @@ class ZoneWatch:
         closed_at = (event.ts + period) * 60
         when = (bar_close_time(event.timeframe, event.ts, self._utc_offset)
                 or "ts=%d" % event.ts)
-        await self._send(
-            "%s %s %s broke %s at %s -- %s after %s touch.%s"
-            % (event.timeframe, event.kind, event.direction,
-               _price(event.level), when,
-               _elapsed(max(0, closed_at - touched_at)), label,
-               " Watch ended." if ended else ""))
+        text = ("%s %s %s broke %s at %s -- %s after %s touch."
+                % (event.timeframe, event.kind, event.direction,
+                   _price(event.level), when,
+                   _elapsed(max(0, closed_at - touched_at)), label))
+        if ended:
+            text += " Watch ended."
+        else:
+            # A BOS re-commits the opposite level, so the CHoCH announced
+            # at the touch is stale now. The event carries the new one.
+            threshold = _choch_threshold(event.direction, event.valid_high,
+                                         event.valid_low)
+            if threshold:
+                text += " CHoCH now on %s." % threshold
+        await self._send(text)
 
     async def _send(self, text: str) -> None:
         try:
             await self._broadcast(text)
         except Exception:
             log.exception("zone watch broadcast failed: %s", text)
+
+
+def _choch_threshold(direction: Optional[str], valid_high: Optional[float],
+                     valid_low: Optional[float]) -> Optional[str]:
+    """The close that would be a CHoCH: against the current direction.
+
+    Bullish, it is a close below the valid low; bearish, a close above
+    the valid high. That level is always armed while its direction
+    holds -- only a break on that side could disarm it, and that break
+    is the CHoCH itself. With no direction yet there is no CHoCH to
+    name: the first break either way is a BOS.
+    """
+    if direction == BULLISH and valid_low is not None:
+        return "a close below %s" % _price(valid_low)
+    if direction == BEARISH and valid_high is not None:
+        return "a close above %s" % _price(valid_high)
+    return None
+
+
+def _where_choch(timeframe: str, state: Optional[WaveState]) -> str:
+    if state is None:
+        return ("%s structure is still warming up, so the CHoCH level "
+                "is not known yet." % timeframe)
+    threshold = _choch_threshold(state.direction, state.valid_high,
+                                 state.valid_low)
+    if threshold is None:
+        return ("%s has no direction yet: the first break either way is "
+                "a BOS, and the CHoCH comes after it." % timeframe)
+    return "%s is %s: CHoCH on %s." % (timeframe, state.direction, threshold)
 
 
 def _price(value: float) -> str:
