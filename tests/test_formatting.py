@@ -293,6 +293,45 @@ class CloseAndBreakevenTests(unittest.TestCase):
                          "order 7 cancelled (demo).")
         self.assertIn("boom", fmt.cancel_order_error("demo", 7, "boom"))
 
+    ORDER = {"id": 12, "symbol": "XAUUSD", "side": "SELL", "volume": 0.1,
+             "price": 4136.5}
+
+    def test_cancel_last_result(self):
+        self.assertEqual(
+            fmt.cancel_last_result("demo", self.ORDER),
+            "cancelled the last order (demo):\n"
+            "(12)  SELL XAUUSD 0.10 @ 4136.5")
+
+    def test_cancel_last_result_with_no_orders(self):
+        self.assertEqual(fmt.cancel_last_result("demo", None),
+                         "no working orders.")
+
+    def test_cancel_last_result_without_a_price(self):
+        row = dict(self.ORDER, price=None)
+        self.assertIn("(12)  SELL XAUUSD 0.10", fmt.cancel_last_result(
+            "demo", row))
+        self.assertNotIn("@", fmt.cancel_last_result("demo", row))
+
+    def test_cancel_all_result(self):
+        results = [dict(self.ORDER, ok=True, message="cancelled"),
+                   dict(self.ORDER, id=9, ok=False, message="gone")]
+        text = fmt.cancel_all_result("demo", results)
+        self.assertIn("cancelled 1/2 orders (demo):", text)
+        self.assertIn("(12)  SELL XAUUSD 0.10 @ 4136.5 → cancelled",
+                      text)
+        self.assertIn("(9)  SELL XAUUSD 0.10 @ 4136.5 → failed: gone",
+                      text)
+
+    def test_cancel_all_result_with_no_orders(self):
+        self.assertEqual(fmt.cancel_all_result("demo", []),
+                         "no working orders.")
+
+    def test_usages_name_the_command_and_an_example(self):
+        self.assertIn("/cancellast", fmt.cancel_last_usage())
+        self.assertIn("/cancellast live100k", fmt.cancel_last_usage())
+        self.assertIn("/cancelall", fmt.cancel_all_usage())
+        self.assertIn("/cancelall live100k", fmt.cancel_all_usage())
+
 
 class CandleAlertTests(unittest.TestCase):
     def test_candle_alert_set(self):
@@ -426,6 +465,11 @@ class BotCommandsTests(unittest.TestCase):
     def test_bot_commands_has_cancel_order(self):
         commands = dict(fmt.BOT_COMMANDS)
         self.assertIn("cancel_order", commands)
+
+    def test_bot_commands_has_the_bulk_cancels(self):
+        commands = dict(fmt.BOT_COMMANDS)
+        self.assertIn("cancellast", commands)
+        self.assertIn("cancelall", commands)
 
     def test_bot_commands_no_duplicates(self):
         names = [c[0] for c in fmt.BOT_COMMANDS]

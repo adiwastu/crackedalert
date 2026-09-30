@@ -141,6 +141,14 @@ def cancel_order_usage() -> str:
                  "/cancel_order 4467051 live100k")
 
 
+def cancel_last_usage() -> str:
+    return usage("/cancellast", "[account]", "/cancellast live100k")
+
+
+def cancel_all_usage() -> str:
+    return usage("/cancelall", "[account]", "/cancelall live100k")
+
+
 def breakeven_usage() -> str:
     return usage("/be", "[account]", "/be live100k")
 
@@ -364,6 +372,37 @@ def cancel_order_error(account: str, order_id: int, reason: str) -> str:
     return "cancel failed (%s): %s" % (esc(account), esc(reason))
 
 
+def _order_line(row: dict) -> str:
+    """One working order: (id)  SELL XAUUSD 0.10 @ 4136.5"""
+    vol = row.get("volume")
+    price = row.get("price")
+    return "(%s)  %s %s %s%s" % (
+        esc(row.get("id")), esc(row.get("side") or "?"),
+        esc(row.get("symbol") or "?"),
+        esc("%.2f" % vol if vol is not None else "?"),
+        esc(" @ %s" % _trim(price)) if price is not None else "")
+
+
+def cancel_last_result(account: str, row: Optional[dict]) -> str:
+    if row is None:
+        return "no working orders."
+    return "cancelled the last order (%s):\n%s" % (
+        esc(account), _order_line(row))
+
+
+def cancel_all_result(account: str, results: List[dict]) -> str:
+    if not results:
+        return "no working orders."
+    ok = sum(1 for r in results if r.get("ok"))
+    lines = ["cancelled %d/%d orders (%s):" % (ok, len(results),
+                                               esc(account))]
+    for r in results:
+        status = "cancelled" if r.get("ok") else "failed: %s" % esc(
+            r.get("message", ""))
+        lines.append("%s → %s" % (_order_line(r), status))
+    return "\n".join(lines)
+
+
 def breakeven_result(account: str, results: List[dict]) -> str:
     if not results:
         return "no open positions."
@@ -511,6 +550,8 @@ BOT_COMMANDS = [
     ("close", "close a position"),
     ("close_all", "close everything"),
     ("cancel_order", "cancel a pending order"),
+    ("cancellast", "cancel the last pending order"),
+    ("cancelall", "cancel every pending order"),
     ("positions", "open positions"),
     ("orders", "working orders"),
     ("alert", "set a price alert"),

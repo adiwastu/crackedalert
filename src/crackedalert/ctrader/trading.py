@@ -521,6 +521,45 @@ class TradingService:
             "orderId": order_id,
         })
 
+    async def cancel_last_order(self, account_code: str) -> Optional[dict]:
+        """Cancel the working order placed most recently.
+
+        cTrader order ids increase with time, so the last order placed is
+        the one with the highest id. Returns its row (see
+        positions_or_orders), or None when there are no working orders.
+        Raises TradeRejected / CTraderError like cancel_order.
+        """
+        rows = await self.positions_or_orders(account_code,
+                                              is_positions=False)
+        if not rows:
+            return None
+        last = max(rows, key=lambda row: int(row["id"]))
+        await self.cancel_order(account_code, int(last["id"]))
+        return last
+
+    async def cancel_all_orders(self, account_code: str) -> list:
+        """Cancel every working order on the account.
+
+        Returns one result dict per order: {id, symbol, side, volume, ok,
+        message}. One failing does not stop the rest, so a partial run
+        reports exactly what was and was not cancelled.
+        """
+        rows = await self.positions_or_orders(account_code,
+                                              is_positions=False)
+        results = []
+        for row in rows:
+            result = {"id": row["id"], "symbol": row.get("symbol"),
+                      "side": row.get("side"), "volume": row.get("volume")}
+            try:
+                await self.cancel_order(account_code, int(row["id"]))
+                result.update(ok=True, message="cancelled")
+            except ct.CTraderError as e:
+                result.update(ok=False, message=e.description)
+            except TradeRejected as e:
+                result.update(ok=False, message=str(e))
+            results.append(result)
+        return results
+
     # ------------------------------------------------------------------
     # close a single position (ProtoOAClosePositionReq)
     # ------------------------------------------------------------------

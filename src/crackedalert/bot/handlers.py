@@ -647,6 +647,8 @@ class Handlers:
         app.add_handler(CommandHandler("close_all", self.close_all))
         app.add_handler(CommandHandler("close", self.close_position))
         app.add_handler(CommandHandler("cancel_order", self.cancel_order))
+        app.add_handler(CommandHandler("cancellast", self.cancel_last))
+        app.add_handler(CommandHandler("cancelall", self.cancel_all))
         app.add_handler(CommandHandler("be", self.breakeven))
         app.add_handler(CommandHandler("guard", self.guard))
         app.add_handler(CommandHandler("ocancel", self.ocancel))
@@ -885,6 +887,58 @@ class Handlers:
                 account, order_id, "internal error"))
             return
         await self._reply(update, fmt.cancel_order_success(account, order_id))
+
+    async def cancel_last(self, update: Update,
+                          _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Cancel the most recently placed pending order, no id needed."""
+        if not self._allowed(update):
+            return
+        try:
+            account = parse_account(update.effective_message.text)
+        except ParseError:
+            await self._reply(update, fmt.cancel_last_usage())
+            return
+        try:
+            row = await self._trader.cancel_last_order(account)
+        except TradeRejected as e:
+            await self._reply(update, str(e))
+            return
+        except CTraderError as e:
+            await self._reply(update, fmt.cancel_order_error(
+                account, 0, e.description))
+            return
+        except Exception:
+            log.exception("cancel last order failed")
+            await self._reply(update, fmt.cancel_order_error(
+                account, 0, "internal error"))
+            return
+        await self._reply(update, fmt.cancel_last_result(account, row))
+
+    async def cancel_all(self, update: Update,
+                         _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Cancel every pending order on an account."""
+        if not self._allowed(update):
+            return
+        try:
+            account = parse_account(update.effective_message.text)
+        except ParseError:
+            await self._reply(update, fmt.cancel_all_usage())
+            return
+        try:
+            results = await self._trader.cancel_all_orders(account)
+        except TradeRejected as e:
+            await self._reply(update, str(e))
+            return
+        except CTraderError as e:
+            await self._reply(update, fmt.cancel_order_error(
+                account, 0, e.description))
+            return
+        except Exception:
+            log.exception("cancel all orders failed")
+            await self._reply(update, fmt.cancel_order_error(
+                account, 0, "internal error"))
+            return
+        await self._reply(update, fmt.cancel_all_result(account, results))
 
     async def breakeven(self, update: Update,
                         _ctx: ContextTypes.DEFAULT_TYPE) -> None:

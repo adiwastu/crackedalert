@@ -438,6 +438,96 @@ class TradingServiceTests(unittest.TestCase):
         self.assertEqual(sent["orderId"], 7)
         self.assertEqual(sent["ctidTraderAccountId"], 111)
 
+    def _orders(self, *ids):
+        """Working orders with these ids, in the given (not id) order."""
+        self.cli.reconcile_payload["order"] = [
+            {"orderId": i,
+             "tradeData": {"symbolId": 41, "volume": 2000,
+                           "tradeSide": "SELL"},
+             "orderType": "LIMIT", "limitPrice": 2400.0 + i}
+            for i in ids]
+
+    def test_cancel_last_order_cancels_the_highest_id(self):
+        # cTrader ids increase with time, so the highest is the newest,
+        # whatever order the gateway lists them in.
+        self._orders(7, 12, 9)
+        row = run(self.service.cancel_last_order("demo"))
+        self.assertEqual([c["orderId"] for c in self.cli.cancels], [12])
+        self.assertEqual(row["id"], 12)
+        self.assertEqual(row["side"], "SELL")
+
+    def test_cancel_last_order_with_one_order(self):
+        row = run(self.service.cancel_last_order("demo"))     # default: 7
+        self.assertEqual([c["orderId"] for c in self.cli.cancels], [7])
+        self.assertEqual(row["id"], 7)
+
+    def test_cancel_last_order_with_none_does_nothing(self):
+        self._orders()
+        self.assertIsNone(run(self.service.cancel_last_order("demo")))
+        self.assertEqual(self.cli.cancels, [])
+
+    def test_cancel_last_order_never_touches_positions(self):
+        self._orders(7)
+        run(self.service.cancel_last_order("demo"))
+        self.assertEqual(self.cli.closes, [])
+
+    def test_cancel_last_order_unknown_account(self):
+        with self.assertRaises(trading.TradeRejected):
+            run(self.service.cancel_last_order("nope"))
+
+    def test_cancel_last_order_when_the_link_is_down(self):
+        self.cli.connected = False
+        with self.assertRaises(trading.TradeRejected):
+            run(self.service.cancel_last_order("demo"))
+        self.assertEqual(self.cli.cancels, [])
+
+    def test_cancel_last_order_works_on_live(self):
+        self._orders(3, 8)
+        run(self.service.cancel_last_order("5k"))
+        self.assertEqual([c["orderId"] for c in self.cli.cancels], [8])
+
+    def test_cancel_all_orders_cancels_every_one(self):
+        self._orders(7, 12, 9)
+        results = run(self.service.cancel_all_orders("demo"))
+        self.assertEqual(sorted(c["orderId"] for c in self.cli.cancels),
+                         [7, 9, 12])
+        self.assertEqual([r["ok"] for r in results], [True, True, True])
+        self.assertEqual(results[0]["message"], "cancelled")
+
+    def test_cancel_all_orders_with_none_is_an_empty_result(self):
+        self._orders()
+        self.assertEqual(run(self.service.cancel_all_orders("demo")), [])
+        self.assertEqual(self.cli.cancels, [])
+
+    def test_cancel_all_orders_never_touches_positions(self):
+        self._orders(7, 9)
+        run(self.service.cancel_all_orders("demo"))
+        self.assertEqual(self.cli.closes, [])
+
+    def test_one_failing_does_not_stop_the_rest(self):
+        # A partial run must report exactly what was and was not
+        # cancelled, not abort on the first error.
+        self._orders(7, 9, 12)
+        real = self.cli.request
+
+        async def flaky(payload_type, payload, timeout=None):
+            if (payload_type == trading.ct.PT_CANCEL_ORDER_REQ
+                    and payload["orderId"] == 9):
+                raise trading.ct.CTraderError("ORDER_NOT_FOUND", "gone")
+            return await real(payload_type, payload, timeout)
+
+        self.cli.request = flaky
+        results = run(self.service.cancel_all_orders("demo"))
+        by_id = {r["id"]: r for r in results}
+        self.assertTrue(by_id[7]["ok"])
+        self.assertFalse(by_id[9]["ok"])
+        self.assertEqual(by_id[9]["message"], "gone")
+        self.assertTrue(by_id[12]["ok"])
+
+    def test_cancel_all_orders_unknown_account(self):
+        with self.assertRaises(trading.TradeRejected):
+            run(self.service.cancel_all_orders("nope"))
+
     def test_breakeven_buy_ready(self):
         # BUY entry 2450, spread 0.2 -> BE at 2450.2; bid 2449.8 < 2450.2
         # so NOT ready yet -> skipped
