@@ -30,9 +30,10 @@ from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
 from .ctrader.tokens import TokenError, TokenStore
 from .ctrader.trading import TradingService, TradeRejected
-from .fvg import IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back, \
-    candle_high, candle_low, fresh_imbalance, gap_bounds, just_closed_ts
-from .h1_zones import H1Zone, H1ZoneStore, NestedGate
+from .fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back,
+                  candle_high, candle_low, fresh_imbalance, gap_bounds,
+                  just_closed_ts, zone_name)
+from .nested_fvg import nested_entries
 from .wave_state import WaveService, WaveStateStore, bar_close_time
 from .zone_watch import (WATCH_TIMEFRAMES, ZoneWatch, ZoneWatchStore,
                          zone_label)
@@ -547,11 +548,8 @@ async def _run_bot(settings: Settings) -> None:
     # Remember which imbalance each check last saw, so a continuation is
     # only skipped if its first candle was really handled.
     imbalance_gate = ImbalanceGate(period=60)
-    m15_nesting = NestedGate(period=15)
-    # Live H1 gaps, for M15 gaps to nest in (h1_zones.py).
-    h1_zones = H1ZoneStore(settings.db_file)
 
-    async def recent_bars(period: str) -> list:
+    async def recent_bars(period: str, count: int = 6) -> list:
         """The latest completed bars on `period`, oldest first."""
         env = feed_account.environment
         info = await markets[env].ensure_symbol(
@@ -565,7 +563,7 @@ async def _run_bot(settings: Settings) -> None:
             # candle in the limit but returns only completed bars, so
             # count=3 can yield just 2 completed candles and the FVG
             # check never sees a full triplet.
-            "count": 6,
+            "count": count,
         })
         bars = payload.get("trendbar", []) or []
         return sorted(
@@ -598,7 +596,6 @@ async def _run_bot(settings: Settings) -> None:
             c1 = bars[-3]
             verdict["high1"] = candle_high(c1)
             verdict["low1"] = candle_low(c1)
-            verdict["bottom"], verdict["top"] = gap_bounds(bars, which)
         return verdict
 
     async def check_h1_imbalance() -> None:
@@ -638,67 +635,59 @@ async def _run_bot(settings: Settings) -> None:
                              direction, note, kind=KIND_ZONE,
                              cc_timeframe="H1", broadcast=True)
             else:
-                flip = candle_store.create(
-                    owner, settings.trade_symbol, "H1", level, direction,
-                    note, broadcast=True)
+                candle_store.create(owner, settings.trade_symbol, "H1",
+                                    level, direction, note, broadcast=True)
                 candle_feed.add_symbol(settings.trade_symbol, "H1")
-                # The zone stays live exactly as long as this flip alert.
-                h1_zones.add(H1Zone(
-                    flip_alert_id=flip.id, symbol=settings.trade_symbol,
-                    which=which, bottom=verdict["bottom"],
-                    top=verdict["top"], formed_ts=newest_ts + 60))
             log.info("imbalance %s: %s alert at %.2f (%s)",
                      which, kind, level, note)
+        # The H1 alerts are already armed, so a failure finding M15 gaps
+        # must not undo or hide them.
+        try:
+            await arm_nested_m15(which, bars)
+        except Exception:
+            log.exception("M15 imbalance scan failed")
 
-    async def check_m15_imbalance() -> None:
-        """An M15 gap nested in a live H1 zone arms its own entry alert."""
-        bars = await recent_bars("M15")
-        newest_ts = (int(bars[-1].get("utcTimestampInMinutes", 0) or 0)
-                     if bars else 0)
+    async def arm_nested_m15(which: str, h1_bars: list) -> None:
+        """M15 gaps on the H1 imbalance's own move that overlap it.
+
+        The three H1 candles are twelve M15 candles, all closed by now,
+        so this runs right after the H1 alerts rather than on a schedule
+        of its own. An M15 gap that lines up with an H1 gap later on is a
+        different move and is never looked at.
+        """
+        m15_bars = await recent_bars("M15", count=16)
+        newest_ts = (int(m15_bars[-1].get("utcTimestampInMinutes", 0) or 0)
+                     if m15_bars else 0)
         warn_if_stale("M15", newest_ts, 15)
-        which = fresh_imbalance(bars, period=15)
-        if which is None:
+        entries = nested_entries(m15_bars, h1_bars, which)
+        if not entries:
+            log.info("M15: no %s imbalance on this H1 move overlaps it",
+                     which)
             return
-        previous = m15_nesting.last_seen
-        outcome, entry = m15_nesting.evaluate(
-            bars, which,
-            h1_zones.live(settings.trade_symbol, candle_store.exists))
-        if outcome == NestedGate.OUTSIDE:
-            log.info("M15 imbalance: %s is not inside a live H1 zone -- "
-                     "ignoring", which)
-            return
-        if outcome == NestedGate.CONTINUATION:
-            log.info("M15 imbalance: %s on bar ts=%d, but the one on bar "
-                     "ts=%s was already armed -- skipping as back to back",
-                     which, newest_ts, previous)
-            return
-        text = "new %s imbalance on M15, inside %s (%.2f-%.2f)" % (
-            which, entry.zone.name, entry.zone.bottom, entry.zone.top)
-        log.info("M15 imbalance: %s", text)
-        await broadcast(text)
-        store.create(settings.allowed_chat_ids[0], settings.trade_symbol,
-                     entry.level, entry.direction, entry.note,
-                     kind=KIND_ZONE, cc_timeframe="M15", broadcast=True)
-        log.info("imbalance M15 %s: price alert at %.2f (%s)",
-                 which, entry.level, entry.note)
+        h1_bottom, h1_top = gap_bounds(h1_bars, which)
+        name = zone_name(which, "H1")
+        owner = settings.allowed_chat_ids[0]
+        for entry in entries:
+            text = ("new %s imbalance on M15, inside %s (%.2f-%.2f)"
+                    % (which, name, h1_bottom, h1_top))
+            log.info("M15 imbalance: %s", text)
+            await broadcast(text)
+            store.create(owner, settings.trade_symbol, entry.level,
+                         entry.direction, entry.note, kind=KIND_ZONE,
+                         cc_timeframe="M15", broadcast=True)
+            log.info("imbalance M15 %s: price alert at %.2f (%s)",
+                     which, entry.level, entry.note)
 
     async def imbalance_watcher() -> None:
-        """Check shortly after every 15-minute boundary: H1 on the hour,
-        then M15. H1 goes first so a zone formed on this boundary is on
-        record before M15 gaps are matched against zones."""
+        """Check shortly after every UTC hour boundary."""
         while True:
             now = time.time()
-            boundary = (int(now // 900) + 1) * 900
-            await asyncio.sleep(boundary - now + 5)
-            if boundary % 3600 == 0:
-                try:
-                    await check_h1_imbalance()
-                except Exception:
-                    log.exception("H1 imbalance check failed")
+            next_hour = (int(now // 3600) + 1) * 3600
+            await asyncio.sleep(next_hour - now + 5)
             try:
-                await check_m15_imbalance()
+                await check_h1_imbalance()
             except Exception:
-                log.exception("M15 imbalance check failed")
+                log.exception("H1 imbalance check failed")
 
     imbalance_task = asyncio.get_running_loop().create_task(
         imbalance_watcher())
@@ -738,7 +727,6 @@ async def _run_bot(settings: Settings) -> None:
     candle_store.close()
     wave_store.close()
     zone_store.close()
-    h1_zones.close()
     subscription_store.close()
     log.info("shut down cleanly")
 
