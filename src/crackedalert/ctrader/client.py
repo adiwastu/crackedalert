@@ -129,6 +129,14 @@ class CTraderClient:
                 pass
             self._runner = None
 
+    async def force_reconnect(self) -> None:
+        """Drop the live session so the runner reconnects with current
+        credentials (used after the stored tokens were replaced under
+        us). No-op when the link is already down: the runner keeps
+        cycling on its own and picks the new tokens up there."""
+        if self._ws is not None:
+            await self._ws.close()
+
     async def wait_ready(self, timeout: float = 30.0) -> None:
         await asyncio.wait_for(self._ready.wait(), timeout)
 
@@ -219,7 +227,6 @@ class CTraderClient:
                     log.info("[%s] connected, authenticating app",
                              self.environment)
                     await self._app_auth()
-                    backoff = BACKOFF_START
                     loop = asyncio.get_running_loop()
                     heartbeat = loop.create_task(self._heartbeat())
                     # The recv loop MUST be running before on_connected: that
@@ -234,6 +241,13 @@ class CTraderClient:
                                 self._on_connected(), receiver)
                         self._ready.set()
                         failures = 0
+                        # Reset the backoff only when the session is FULLY
+                        # up -- account auth included. Resetting earlier
+                        # (e.g. right after app auth) let a revoked access
+                        # token storm reconnects at ~2s forever: every
+                        # cycle re-passes app auth, then dies on account
+                        # auth, so the backoff never got to grow.
+                        backoff = BACKOFF_START
                         log.info("[%s] ready", self.environment)
                         await receiver
                     finally:

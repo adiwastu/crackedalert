@@ -14,12 +14,14 @@ from typing import Optional
 
 from telegram import Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (Application, CommandHandler, ContextTypes,
+                          MessageHandler, filters)
 
 from .. import alerts as alerts_mod
 from ..config import Settings
 from ..ctrader import candles as candles_mod
 from ..ctrader.client import CTraderError
+from ..ctrader.tokens import extract_code
 from ..ctrader.trading import TradeRejected
 from ..fvg import candle_high, candle_low
 from . import formatting as fmt
@@ -607,7 +609,8 @@ class Handlers:
                  pending_cc: Optional[dict] = None,
                  imbalance_checker=None,
                  cancel_watch: Optional[dict] = None,
-                 watch_subscribe=None):
+                 watch_subscribe=None,
+                 token_recovery=None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
         # candle_store: CandleAlertStore; candle_feed: CandleFeed
@@ -618,6 +621,8 @@ class Handlers:
         # cancel_watch: shared dict (main.py) of unfilled-order cancel
         #   conditions; main's tick listener fires the broker cancels.
         # watch_subscribe: main.py hook ensuring ticks flow for an account.
+        # token_recovery: async code -> status string (main.py). Exchanges
+        #   a pasted OAuth code for fresh tokens when the grant is dead.
         self._settings = settings
         self._store = store
         self._feed = feed
@@ -630,6 +635,7 @@ class Handlers:
         self._imbalance_checker = imbalance_checker
         self._cancel_watch = cancel_watch
         self._watch_subscribe = watch_subscribe
+        self._token_recovery = token_recovery
 
     def register(self, app: Application) -> None:
         # un-gated commands
@@ -656,6 +662,23 @@ class Handlers:
         app.add_handler(CommandHandler("ccalert", self.cc_alert))
         app.add_handler(CommandHandler("cclist", self.cc_list))
         app.add_handler(CommandHandler("cccancel", self.cc_cancel))
+        # Dead-grant recovery: non-command text is only interesting when
+        # it carries the OAuth redirect the token-dead alert asks for.
+        # Everything else falls through silently.
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                       self.text_fallback))
+
+    async def text_fallback(self, update: Update,
+                            _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update) or self._token_recovery is None:
+            return
+        text = update.effective_message.text or ""
+        code = extract_code(text)
+        if code is None:
+            return
+        log.info("token recovery: exchanging pasted authorization code")
+        result = await self._token_recovery(code)
+        await self._reply(update, result)
 
     def _allowed(self, update: Update) -> bool:
         chat = update.effective_chat

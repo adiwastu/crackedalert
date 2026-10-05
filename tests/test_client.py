@@ -180,6 +180,49 @@ class ConnectionLifecycle(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0]["symbolId"], 41)
 
+    def test_backoff_grows_when_ready_is_never_reached(self):
+        """Dead-token storm regression (Oct 2026 incident): cTrader
+        accepted the TCP connect and the app auth every cycle but
+        rejected the account auth (revoked grant), and the backoff was
+        reset after app auth -- so reconnects stormed at ~2s and flooded
+        the journal with millions of lines over days. The reset must
+        happen only when the session is fully ready; until then the
+        backoff has to grow 1, 2, 4, ...
+
+        The recorded sleeps include the heartbeat task's fixed 8s nap
+        (it is also an asyncio.sleep), so filter those out before
+        asserting on the reconnect ladder."""
+        ws = FakeWS()
+        delays = []
+        real_sleep = asyncio.sleep
+
+        async def recording_sleep(seconds):
+            delays.append(seconds)
+            await real_sleep(min(seconds, 0.01))
+
+        async def failing_on_connected():
+            raise ct.CTraderError("CH_ACCESS_TOKEN_INVALID",
+                                  "Invalid access token")
+
+        async def scenario():
+            with mock.patch.object(ct.websockets, "connect",
+                                   FakeConnect(ws)), \
+                 mock.patch.object(ct.asyncio, "sleep", recording_sleep):
+                cli = self._client(ws, on_connected=failing_on_connected)
+                cli.start()
+                spins = 0
+                ladder = [d for d in delays if d != ct.HEARTBEAT_INTERVAL]
+                while len(ladder) < 3 and spins < 10000:
+                    await real_sleep(0)   # yield to the runner
+                    spins += 1
+                    ladder = [d for d in delays if d != ct.HEARTBEAT_INTERVAL]
+                await cli.stop()
+
+        run(scenario())
+        ladder = [d for d in delays if d != ct.HEARTBEAT_INTERVAL]
+        self.assertGreaterEqual(len(ladder), 3)
+        self.assertEqual(ladder[:3], [1.0, 2.0, 4.0])
+
     def test_blocking_handler_does_not_stall_correlation(self):
         """Deadlock regression (HANDOFF 2.x): the old recv loop awaited
         event handlers inline, so a handler doing request/response work

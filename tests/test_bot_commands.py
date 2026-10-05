@@ -14,7 +14,11 @@ class FakeApp:
         self.commands = set()
 
     def add_handler(self, handler):
-        self.commands |= set(handler.commands)
+        # Only CommandHandlers carry .commands; MessageHandler (the
+        # pasted-redirect fallback) has none and registers no menu entry.
+        commands = getattr(handler, "commands", None)
+        if commands:
+            self.commands |= set(commands)
 
 
 def registered():

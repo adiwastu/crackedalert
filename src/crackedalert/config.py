@@ -13,6 +13,11 @@ from dotenv import load_dotenv
 
 DEFAULT_DATA_DIR = "/etc/cracked_alert"
 ENV_FILE = os.path.join(DEFAULT_DATA_DIR, ".env_cracked")
+# Where cTrader lands the browser after the operator approves access.
+# Must match the redirect URI registered on the Open API app
+# (auth_setup.py carries the same default). The dead-grant recovery
+# flow exchanges the ?code= from this redirect.
+DEFAULT_REDIRECT_URI = "https://hotland3x3.my.id/sable/callback"
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,7 @@ class Settings:
     allowed_chat_ids: List[int]
     ctrader_client_id: str
     ctrader_client_secret: str
+    ctrader_redirect_uri: str = DEFAULT_REDIRECT_URI
     accounts: Dict[str, Account] = field(default_factory=dict)
     price_feed_account: str = "demo"
     data_dir: str = DEFAULT_DATA_DIR
@@ -111,6 +117,8 @@ def load_settings() -> Settings:
         allowed_chat_ids=chat_ids,
         ctrader_client_id=_require("CTRADER_CLIENT_ID"),
         ctrader_client_secret=_require("CTRADER_CLIENT_SECRET"),
+        ctrader_redirect_uri=os.environ.get("CTRADER_REDIRECT_URI", "").strip()
+        or DEFAULT_REDIRECT_URI,
         accounts=accounts,
         price_feed_account=price_feed,
         data_dir=os.environ.get("CRACKED_DATA_DIR", DEFAULT_DATA_DIR).strip()

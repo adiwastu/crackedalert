@@ -28,7 +28,8 @@ from .config import ConfigError, Settings, load_settings
 from .ctrader import client as ct
 from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
-from .ctrader.tokens import TokenError, TokenStore
+from .ctrader.tokens import (TokenError, TokenStore, authorize_url,
+                             make_selfheal_refresh)
 from .ctrader.trading import TradingService, TradeRejected
 from .fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back,
                   candle_high, candle_low, fresh_imbalance, gap_bounds,
@@ -163,16 +164,29 @@ async def _run_bot(settings: Settings) -> None:
 
     feed_account = settings.accounts[settings.price_feed_account]
 
+    # Self-heal an expired access token: the daily refresh loop can miss
+    # the expiry window unannounced, and without this the reconnect loop
+    # would auth-reject forever (link "down", no live prices). When the
+    # refresh itself is rejected -- a revoked grant, which refresh cannot
+    # fix -- ping the operator at a sane rate with the consent link; the
+    # pasted-redirect handler below completes the recovery.
+    async def token_dead_alert(e: Exception) -> None:
+        await notify(
+            settings.allowed_chat_ids[0],
+            fmt.token_dead_alert(
+                str(e),
+                authorize_url(settings.ctrader_client_id,
+                              settings.ctrader_redirect_uri)))
+
+    selfheal_refresh = make_selfheal_refresh(tokens, token_dead_alert)
+
     # one client + market-data cache per environment in use
     clients: Dict[str, ct.CTraderClient] = {}
     markets: Dict[str, MarketData] = {}
     for env in settings.environments_in_use():
         cli = ct.CTraderClient(env, settings.ctrader_client_id,
                                settings.ctrader_client_secret)
-        # Self-heal an expired access token: the daily refresh loop can
-        # miss the expiry window unnounced, and without this the reconnect
-        # loop would auth-reject forever (link "down", no live prices).
-        cli.set_token_refresher(tokens.refresh)
+        cli.set_token_refresher(selfheal_refresh)
         clients[env] = cli
         markets[env] = MarketData(cli)
 
@@ -518,6 +532,29 @@ async def _run_bot(settings: Settings) -> None:
     for env, cli in clients.items():
         cli.set_on_connected(make_on_connected(env))
 
+    # Dead-grant recovery: the operator pastes the OAuth redirect URL
+    # (linked in the token-dead alert) into the chat. Exchange the one-
+    # time code for fresh tokens, drop the live sessions so the runners
+    # reconnect with them, and report whether the feed is already back.
+    async def token_recovery(code: str) -> str:
+        try:
+            await tokens.exchange_code(code, settings.ctrader_redirect_uri)
+        except Exception as e:
+            log.warning("token recovery exchange failed: %s", e)
+            return fmt.token_recover_failed(e)
+        kicks = await asyncio.gather(
+            *(cli.force_reconnect() for cli in clients.values()),
+            return_exceptions=True)
+        for r in kicks:
+            if isinstance(r, Exception):
+                log.warning("token recovery session kick failed: %s", r)
+        ready = await asyncio.gather(
+            *(cli.wait_ready(90) for cli in clients.values()),
+            return_exceptions=True)
+        if all(not isinstance(r, Exception) for r in ready):
+            return fmt.token_recover_ok()
+        return fmt.token_recover_reconnecting()
+
     handlers = Handlers(settings, store, feed, settings.trade_symbol,
                         trader=trader, candle_store=candle_store,
                         candle_feed=candle_feed,
@@ -525,7 +562,8 @@ async def _run_bot(settings: Settings) -> None:
                         pending_cc=pending_cc,
                         cancel_watch=order_cancel_watch,
                         watch_subscribe=watch_subscribe,
-                        imbalance_checker=lambda: imbalance_verdict())
+                        imbalance_checker=lambda: imbalance_verdict(),
+                        token_recovery=token_recovery)
     handlers.register(app)
 
     # P2: native command menu
@@ -534,8 +572,10 @@ async def _run_bot(settings: Settings) -> None:
 
     async def on_token_failure(reason: str) -> None:
         await notify(settings.allowed_chat_ids[0],
-                     "\u26a0\ufe0f cTrader token refresh failed: %s\n"
-                     "re-run auth_setup.py on the VPS." % reason)
+                     fmt.token_dead_alert(
+                         reason,
+                         authorize_url(settings.ctrader_client_id,
+                                       settings.ctrader_redirect_uri)))
 
     refresh_task = asyncio.get_running_loop().create_task(
         tokens.refresh_loop(on_failure=on_token_failure))

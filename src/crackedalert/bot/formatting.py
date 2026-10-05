@@ -197,6 +197,44 @@ def account_not_found(account: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# dead-grant recovery
+# --------------------------------------------------------------------------
+
+
+def token_dead_alert(reason: str, authorize_url: str) -> str:
+    """Broadcast when the refresh self-heal keeps failing: the grant was
+    revoked and only a fresh human consent fixes it. The operator's part
+    is a browser approval plus one pasted message; the bot does the rest.
+    """
+    return "\n".join([
+        "\U0001f6a8 cTrader tokens are dead and auto-refresh is rejected:",
+        "<code>%s</code>" % esc(reason),
+        "",
+        "Fix from your phone (~30s, no SSH):",
+        "1. open <a href=\"%s\">the cTrader approval page</a>"
+        % _html_escape(authorize_url, quote=True),
+        "2. log in and approve access for the bot",
+        "3. paste the URL you land on right here (a 404 page is fine)",
+        "The bot trades the code for fresh tokens and reconnects itself.",
+    ])
+
+
+def token_recover_ok() -> str:
+    return "\u2705 fresh tokens saved and the feed is back up."
+
+
+def token_recover_reconnecting() -> str:
+    return ("\u2705 fresh tokens saved -- reconnecting now, "
+            "give it a minute.")
+
+
+def token_recover_failed(reason: str) -> str:
+    return ("\u274c could not exchange that code: %s\n"
+            "approve again and paste the newest redirect URL."
+            % esc(reason))
+
+
+# --------------------------------------------------------------------------
 # help
 # --------------------------------------------------------------------------
 
