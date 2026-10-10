@@ -9,6 +9,7 @@ can join.
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -18,12 +19,14 @@ from telegram.ext import (Application, CommandHandler, ContextTypes,
                           MessageHandler, filters)
 
 from .. import alerts as alerts_mod
+from .. import risk
 from ..config import Settings
 from ..ctrader import candles as candles_mod
 from ..ctrader.client import CTraderError
 from ..ctrader.tokens import extract_code
 from ..ctrader.trading import TradeRejected
 from ..fvg import candle_high, candle_low
+from ..scheduled_order import next_occurrence, parse_fire_time
 from . import formatting as fmt
 from .subscriptions import SubscriptionStore
 
@@ -355,6 +358,58 @@ def parse_ocancel(text: str) -> tuple:
     return order_id, price
 
 
+@dataclass(frozen=True)
+class LaterArgs:
+    fire_time: str      # normalized "HH:MM"
+    band_low: float
+    band_high: float
+    spec: str           # pending-order args, /p syntax after the 'p'
+
+
+def parse_later(text: str) -> tuple:
+    """/later                      -> ("list", None)
+       /later off [id]            -> ("off", id or None)
+       /later <HH:MM> <band_low> <band_high> p <pending order spec>
+                                  -> ("arm", LaterArgs)
+
+    The spec is exactly what would follow /p (positional or named-flag
+    form) and is validated here with the same parser, so the scheduled
+    order behaves like the one you would have typed yourself. The time
+    is 24h HH:MM on the operator's display clock; the band is two
+    absolute prices, low strictly below high.
+    """
+    tokens = text.split()[1:]
+    if not tokens:
+        return ("list", None)
+    if tokens[0].lower() in ("off", "cancel", "stop"):
+        if len(tokens) == 1:
+            return ("off", None)
+        try:
+            return ("off", int(tokens[1]))
+        except ValueError:
+            raise ParseError("rule id is not a number")
+    if len(tokens) < 5:
+        raise ParseError("usage")
+    fire_time = parse_fire_time(tokens[0])
+    if fire_time is None:
+        raise ParseError("fire time must be 24h HH:MM, e.g. 06:00")
+    try:
+        band_low = float(tokens[1])
+        band_high = float(tokens[2])
+    except ValueError:
+        raise ParseError("band prices must be numbers")
+    if not band_low < band_high:
+        raise ParseError("band low must be below band high")
+    if tokens[3].lower() != "p":
+        raise ParseError("only pending orders ('p') are supported")
+    spec = " ".join(tokens[4:])
+    try:
+        parse_trade("/p " + spec, is_market=False)
+    except ParseError as e:
+        raise ParseError("bad pending order spec: %s" % e)
+    return ("arm", LaterArgs(fire_time, band_low, band_high, spec))
+
+
 def parse_guard(text: str) -> tuple:
     """/guard <position_id> <price> <tf> [--all]
        /guard --id 4467051 --price 4080 --tf H1 [--all]
@@ -598,6 +653,29 @@ def parse_cc_alert(text: str, default_symbol: str) -> CandleAlertArgs:
                            message=message, broadcast=broadcast)
 
 
+def order_success_text(plan, symbol, result, lots, args) -> str:
+    """The /m and /p success card. Shared with the scheduled-order
+    runner so an automatic placement reads exactly like a manual one."""
+    is_market = plan.order_kind == risk.MARKET
+    if is_market:
+        entry_label = fmt.entry_label_market(plan.entry_ref, symbol.digits)
+    else:
+        entry_label = fmt.entry_label_pending(plan.entry_ref,
+                                              plan.placement_price,
+                                              symbol.digits)
+    return fmt.order_success(
+        ticket=result.order_id, symbol=symbol.name,
+        direction=plan.direction,
+        kind_label="MARKET" if is_market else "PENDING",
+        account=args.account, lots=lots, risk_pct=args.risk_pct,
+        risk_usd=plan.risk_usd, entry_label=entry_label,
+        sl=plan.sl, tp=plan.tp, rr=args.rr,
+        widen_label=plan.widen_label, digits=symbol.digits,
+        dollar_risk=args.risk_usd is not None,
+        smart_sl=plan.smart_sl, smart_risk_usd=plan.smart_risk_usd,
+        smart_risk_pct=plan.smart_risk_pct)
+
+
 class Handlers:
     """Binds commands to services. Trading arrives with Phase 3; /m and /p
     reply with a migration notice until then."""
@@ -610,7 +688,8 @@ class Handlers:
                  imbalance_checker=None,
                  cancel_watch: Optional[dict] = None,
                  watch_subscribe=None,
-                 token_recovery=None):
+                 token_recovery=None,
+                 scheduled=None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
         # candle_store: CandleAlertStore; candle_feed: CandleFeed
@@ -623,6 +702,7 @@ class Handlers:
         # watch_subscribe: main.py hook ensuring ticks flow for an account.
         # token_recovery: async code -> status string (main.py). Exchanges
         #   a pasted OAuth code for fresh tokens when the grant is dead.
+        # scheduled: ScheduledOrderRunner (main.py) backing /later.
         self._settings = settings
         self._store = store
         self._feed = feed
@@ -636,6 +716,7 @@ class Handlers:
         self._cancel_watch = cancel_watch
         self._watch_subscribe = watch_subscribe
         self._token_recovery = token_recovery
+        self._scheduled = scheduled
 
     def register(self, app: Application) -> None:
         # un-gated commands
@@ -655,6 +736,7 @@ class Handlers:
         app.add_handler(CommandHandler("cancel_order", self.cancel_order))
         app.add_handler(CommandHandler("cancellast", self.cancel_last))
         app.add_handler(CommandHandler("cancelall", self.cancel_all))
+        app.add_handler(CommandHandler("later", self.later))
         app.add_handler(CommandHandler("be", self.breakeven))
         app.add_handler(CommandHandler("guard", self.guard))
         app.add_handler(CommandHandler("ocancel", self.ocancel))
@@ -963,6 +1045,65 @@ class Handlers:
             return
         await self._reply(update, fmt.cancel_all_result(account, results))
 
+    async def later(self, update: Update,
+                    _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Arm / list / cancel a one-shot scheduled pending order.
+
+        /later 06:00 2330 2350 p 2336 2341 n 3 1 5k -- at 06:00 (display
+        clock), if price is inside 2330-2350, place that /p.
+        """
+        if not self._allowed(update):
+            return
+        if self._scheduled is None:
+            await self._reply(update, "scheduled orders are not wired up.")
+            return
+        try:
+            kind, payload = parse_later(update.effective_message.text or "")
+        except ParseError:
+            await self._reply(update, fmt.scheduled_usage())
+            return
+        chat_id = update.effective_chat.id
+        offset = self._settings.display_utc_offset
+        if kind == "list":
+            await self._reply(update, fmt.scheduled_list(
+                self._scheduled.rules(), offset))
+            return
+        if kind == "off":
+            await self._later_off(update, chat_id, payload, offset)
+            return
+        args = payload
+        trade = parse_trade("/p " + args.spec, is_market=False)
+        if trade.account not in self._settings.accounts:
+            await self._reply(update, fmt.account_not_found(trade.account))
+            return
+        next_fire = next_occurrence(time.time(), args.fire_time, offset)
+        rule = self._scheduled.arm(
+            chat_id, trade.account, args.fire_time, args.band_low,
+            args.band_high, args.spec, next_fire)
+        await self._reply(update, fmt.scheduled_set(
+            rule, fmt.fire_label(next_fire, offset)))
+
+    async def _later_off(self, update: Update, chat_id: int,
+                         rule_id: Optional[int], offset: float) -> None:
+        if rule_id is None:
+            armed = [r for r in self._scheduled.rules(limit=100)
+                     if r.status == "armed" and r.chat_id == chat_id]
+            if not armed:
+                await self._reply(update, "no armed scheduled orders.")
+                return
+            if len(armed) > 1:
+                await self._reply(update, fmt.scheduled_list(
+                    self._scheduled.rules(), offset)
+                    + "\npick one: <code>/later off &lt;id&gt;</code>")
+                return
+            rule_id = armed[0].id
+        if self._scheduled.cancel(rule_id, chat_id):
+            log.info("scheduled order %s cancelled via /later off",
+                     rule_id)
+            await self._reply(update, fmt.scheduled_cancelled(rule_id))
+        else:
+            await self._reply(update, fmt.scheduled_not_found(rule_id))
+
     async def breakeven(self, update: Update,
                         _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
@@ -1103,8 +1244,7 @@ class Handlers:
                 log.info("cancel condition set on order %d at %.2f",
                          order_id, price)
                 await self._reply(update,
-                    "cancel condition set: order %d will be cancelled if "
-                    "price hits %.2f before it fills." % (order_id, price))
+                                  fmt.cancel_condition_set(order_id, price))
                 return
         await self._reply(update, "order %d not found." % order_id)
 
@@ -1234,23 +1374,8 @@ class Handlers:
                 str(e), "unknown"))
             return
 
-        if is_market:
-            entry_label = fmt.entry_label_market(plan.entry_ref,
-                                                 symbol.digits)
-        else:
-            entry_label = fmt.entry_label_pending(
-                plan.entry_ref, plan.placement_price, symbol.digits)
-
-        await self._reply(update, fmt.order_success(
-            ticket=result.order_id, symbol=symbol.name,
-            direction=plan.direction, kind_label=kind_label,
-            account=args.account, lots=lots, risk_pct=args.risk_pct,
-            risk_usd=plan.risk_usd, entry_label=entry_label,
-            sl=plan.sl, tp=plan.tp, rr=args.rr,
-            widen_label=plan.widen_label, digits=symbol.digits,
-            dollar_risk=args.risk_usd is not None,
-            smart_sl=plan.smart_sl, smart_risk_usd=plan.smart_risk_usd,
-            smart_risk_pct=plan.smart_risk_pct))
+        await self._reply(update, order_success_text(plan, symbol, result,
+                                                     lots, args))
 
         if args.smart_sl is not None:
             if self._candle_store is None or self._candle_feed is None:
@@ -1279,10 +1404,8 @@ class Handlers:
                     "warning: cancel condition requested but the watch "
                     "is not wired up.")
             else:
-                await self._reply(update,
-                    "cancel condition set: order %s will be cancelled if "
-                    "price hits %.2f before it fills."
-                    % (result.order_id, args.cancel_price))
+                await self._reply(update, fmt.cancel_condition_set(
+                    result.order_id, args.cancel_price))
 
     async def _attach_cc_guard(self, update: Update, plan,
                                args: TradeArgs, result,

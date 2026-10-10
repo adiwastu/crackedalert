@@ -8,6 +8,7 @@ spans, and emoji side-glyphs. Function signatures are unchanged.
 """
 
 from html import escape as _html_escape
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from .. import version as _pkg_version
@@ -160,6 +161,13 @@ def candle_alert_usage() -> str:
 
 def candle_cancel_usage() -> str:
     return usage("/cccancel", "[id]", "/cccancel 3")
+
+
+def scheduled_usage() -> str:
+    return usage("/later",
+                 "<HH:MM> <band_low> <band_high> p <entry> <sl> <widen> "
+                 "<rr> <risk%> <account>",
+                 "/later 06:00 4330 4350 p 4336 4341 n 3 1 5k")
 
 
 # --------------------------------------------------------------------------
@@ -410,6 +418,11 @@ def cancel_order_error(account: str, order_id: int, reason: str) -> str:
     return "cancel failed (%s): %s" % (esc(account), esc(reason))
 
 
+def cancel_condition_set(order_id, price: float) -> str:
+    return ("cancel condition set: order %s will be cancelled if price "
+            "hits %.2f before it fills." % (esc(order_id), price))
+
+
 def _order_line(row: dict) -> str:
     """One working order: (id)  SELL XAUUSD 0.10 @ 4136.5"""
     vol = row.get("volume")
@@ -576,12 +589,123 @@ def not_subscribed(chat_id: int) -> str:
 
 
 # --------------------------------------------------------------------------
+# scheduled pending orders (/later)
+# --------------------------------------------------------------------------
+
+_STATUS_GLYPH = {
+    "armed": "\u23F0",
+    "done": "\u2705",
+    "skipped": "\u27A1",
+    "failed": "\u274C",
+    "cancelled": "\u26D4",
+}
+
+_STATUS_TEXT = {
+    "armed": "armed",
+    "done": "fired \u2014 order placed",
+    "skipped": "skipped \u2014 price outside band",
+    "failed": "failed \u2014 nothing placed",
+    "cancelled": "cancelled",
+}
+
+
+def fire_label(next_fire_utc: int, utc_offset: float = 0.0) -> str:
+    """Unix UTC -> 'YYYY-MM-DD HH:MM' on the operator's display clock."""
+    local = next_fire_utc + utc_offset * 3600
+    return datetime.fromtimestamp(local, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M")
+
+
+def scheduled_set(rule, next_fire_local: str) -> str:
+    return "\n".join([
+        "\u23F0 scheduled pending order armed (id: %s)" % esc(rule.id),
+        "checks at <b>%s</b> your time \u2014 next: <code>%s</code>"
+        % (esc(rule.fire_time), esc(next_fire_local)),
+        "places only if price is inside <code>%s</code> \u2013 <code>%s</code>"
+        % (esc(_trim(rule.band_low)), esc(_trim(rule.band_high))),
+        "",
+        "then places: <code>p %s</code>" % esc(rule.spec),
+        "one shot: it fires or skips once, then is done.",
+        "cancel with <code>/later off %s</code>" % esc(rule.id),
+    ])
+
+
+def scheduled_list(rules: List, utc_offset: float = 0.0) -> str:
+    if not rules:
+        return "no scheduled orders."
+    lines = ["scheduled orders:"]
+    for r in rules:
+        glyph = _STATUS_GLYPH.get(r.status, "\u26AA")
+        lines.append("%s <code>%s</code> \u00b7 %s \u00b7 band %s\u2013%s "
+                     "\u00b7 <code>p %s</code>"
+                     % (glyph, esc(r.id), esc(r.fire_time),
+                        esc(_trim(r.band_low)), esc(_trim(r.band_high)),
+                        esc(r.spec)))
+        if r.status == "armed":
+            lines.append("    next check %s (your time)"
+                         % esc(fire_label(r.next_fire, utc_offset)))
+        else:
+            lines.append("    %s" % esc(_STATUS_TEXT.get(r.status,
+                                                         r.status)))
+    return "\n".join(lines)
+
+
+def scheduled_fired(rule, price: float, body: str, notes: str = "") -> str:
+    text = ("\u23F0\u2705 scheduled %s order fired \u2014 price %s is "
+            "inside band %s\u2013%s.\n\n%s"
+            % (esc(rule.fire_time), esc(_trim(price)),
+               esc(_trim(rule.band_low)), esc(_trim(rule.band_high)),
+               body))
+    if notes:
+        text += "\n" + notes
+    return text
+
+
+def scheduled_skipped(rule, price: float) -> str:
+    return ("\u23F0 scheduled %s order skipped: price %s is outside band "
+            "%s\u2013%s. No order placed."
+            % (esc(rule.fire_time), esc(_trim(price)),
+               esc(_trim(rule.band_low)), esc(_trim(rule.band_high))))
+
+
+def scheduled_retry(rule, reason: str, next_try_local: str,
+                    next_attempt: int) -> str:
+    return ("\u26A0\uFE0F scheduled %s order could not fire: %s\n"
+            "retrying at %s your time (attempt %d of 3). Nothing was "
+            "placed yet."
+            % (esc(rule.fire_time), esc(reason), esc(next_try_local),
+               next_attempt))
+
+
+def scheduled_failed(rule, reason: str, attempts: int) -> str:
+    return ("\u274C scheduled %s order gave up after %d attempts: %s\n"
+            "nothing was placed. Re-arm with /later if you still want it."
+            % (esc(rule.fire_time), attempts, esc(reason)))
+
+
+def scheduled_missed(rule, next_fire_local: str) -> str:
+    return ("\u23F0 scheduled %s order missed its window (the bot was "
+            "down) \u2014 nothing was placed. Still armed for %s your "
+            "time." % (esc(rule.fire_time), esc(next_fire_local)))
+
+
+def scheduled_cancelled(rule_id) -> str:
+    return "scheduled order %s cancelled." % esc(rule_id)
+
+
+def scheduled_not_found(rule_id) -> str:
+    return ("no armed scheduled order %s (check /later for ids)."
+            % esc(rule_id))
+
+
+# --------------------------------------------------------------------------
 # setMyCommands payload — call once at startup
 # --------------------------------------------------------------------------
 
 BOT_COMMANDS = [
     ("m", "market order"),
     ("p", "pending order"),
+    ("later", "one-shot: place a /p at a time if price is in a band"),
     ("be", "SL to breakeven"),
     ("guard", "candle-close guard on an open position"),
     ("ocancel", "cancel an unfilled order if price hits a level"),

@@ -22,7 +22,7 @@ from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
 from .alert_status import ActiveAlert, AlertStatusServer
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
-from .bot.handlers import Handlers
+from .bot.handlers import Handlers, order_success_text, parse_trade
 from .bot.subscriptions import SubscriptionStore
 from .config import ConfigError, Settings, load_settings
 from .ctrader import client as ct
@@ -35,6 +35,7 @@ from .fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back,
                   candle_high, candle_low, fresh_imbalance, gap_bounds,
                   just_closed_ts, zone_name)
 from .nested_fvg import nested_entries
+from .scheduled_order import ScheduledOrderRunner, ScheduledOrderStore
 from .wave_state import WaveService, WaveStateStore, bar_close_time
 from .zone_watch import (WATCH_TIMEFRAMES, ZoneWatch, ZoneWatchStore,
                          zone_label)
@@ -555,6 +556,34 @@ async def _run_bot(settings: Settings) -> None:
             return fmt.token_recover_ok()
         return fmt.token_recover_reconnecting()
 
+    # One-shot scheduled pending orders (/later): at the rule's time the
+    # bid is checked against the rule's absolute band; inside it, the
+    # stored /p spec is placed exactly as if the operator had typed it.
+    scheduled_store = ScheduledOrderStore(settings.db_file)
+
+    async def scheduled_bid(shortcode: str) -> Optional[float]:
+        """Current bid for a rule's band check, or None when unavailable."""
+        acc = settings.accounts.get(shortcode)
+        if acc is None:
+            return None
+        market = markets.get(acc.environment)
+        if market is None:
+            return None
+        try:
+            _info, quote = await market.ensure_quote(
+                acc.ctid_account_id, settings.trade_symbol)
+        except (ct.CTraderError, ct.NotConnected) as e:
+            log.warning("scheduled bid fetch failed for %s: %s",
+                        shortcode, e)
+            return None
+        return quote.bid if quote is not None else None
+
+    scheduled_runner = ScheduledOrderRunner(
+        scheduled_store, trader, settings, notify, scheduled_bid,
+        watch_subscribe=watch_subscribe, pending_cc=pending_cc,
+        order_cancel_watch=order_cancel_watch,
+        parse_spec=parse_trade, format_success=order_success_text)
+
     handlers = Handlers(settings, store, feed, settings.trade_symbol,
                         trader=trader, candle_store=candle_store,
                         candle_feed=candle_feed,
@@ -563,7 +592,8 @@ async def _run_bot(settings: Settings) -> None:
                         cancel_watch=order_cancel_watch,
                         watch_subscribe=watch_subscribe,
                         imbalance_checker=lambda: imbalance_verdict(),
-                        token_recovery=token_recovery)
+                        token_recovery=token_recovery,
+                        scheduled=scheduled_runner)
     handlers.register(app)
 
     # P2: native command menu
@@ -732,6 +762,9 @@ async def _run_bot(settings: Settings) -> None:
     imbalance_task = asyncio.get_running_loop().create_task(
         imbalance_watcher())
 
+    scheduled_task = asyncio.get_running_loop().create_task(
+        scheduled_runner.run())
+
     for cli in clients.values():
         cli.start()
     candle_feed.start()
@@ -760,6 +793,7 @@ async def _run_bot(settings: Settings) -> None:
             await app.stop()
 
     refresh_task.cancel()
+    scheduled_task.cancel()
     await candle_feed.stop()
     for cli in clients.values():
         await cli.stop()
@@ -768,6 +802,7 @@ async def _run_bot(settings: Settings) -> None:
     wave_store.close()
     zone_store.close()
     subscription_store.close()
+    scheduled_store.close()
     log.info("shut down cleanly")
 
 

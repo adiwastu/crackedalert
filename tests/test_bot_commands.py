@@ -33,6 +33,9 @@ class CommandRegistrationTests(unittest.TestCase):
         self.assertIn("cancellast", registered())
         self.assertIn("cancelall", registered())
 
+    def test_the_scheduled_order_is_registered(self):
+        self.assertIn("later", registered())
+
     def test_every_menu_entry_has_a_handler(self):
         # A command in the menu that nothing answers looks broken to the
         # user, and nothing else guards against it.
