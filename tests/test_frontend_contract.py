@@ -145,9 +145,9 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn("#7b2ff7", self.ui)   # card 3 purple accent
 
     def test_candle_tf_defaults_m5(self) -> None:
-        # Candle-close TF defaults to M5 (both the smart-SL TF and the
-        # /ccalert builder now preselect M5).
-        self.assertEqual(self.ui.count("<option selected>M5</option>"), 2)
+        # Candle-close TF defaults to M5 (the smart-SL TF, the /ccalert
+        # builder and the /later builder all preselect M5).
+        self.assertEqual(self.ui.count("<option selected>M5</option>"), 3)
 
     def test_trade_builder_emits_named_flags(self) -> None:
         # v2.0.61: every builder copies named-flag commands (flag form is
@@ -193,6 +193,43 @@ class FrontendContractTest(unittest.TestCase):
     def test_cancel_condition_in_readout(self) -> None:
         self.assertIn("cancel if price hits ", self.ui)
         self.assertIn("S.orderType==='pending'&&!isNaN(cc)", self.ui)
+
+    def test_later_builder_present(self) -> None:
+        # v2.0.79: fourth builder -- a one-shot scheduled pending order
+        # (/later HH:MM band_low band_high p <spec>), teal accent card.
+        self.assertIn('id="card-later"', self.ui)
+        self.assertIn('id="la-time"', self.ui)
+        self.assertIn('id="la-low"', self.ui)
+        self.assertIn('id="la-high"', self.ui)
+        self.assertIn('id="la-entry"', self.ui)
+        self.assertIn('id="la-sl"', self.ui)
+        self.assertIn('id="later-cmd"', self.ui)
+        self.assertIn("function laterCmd", self.ui)
+        self.assertIn("function laterReadout", self.ui)
+        self.assertIn("#0b7285", self.ui)
+
+    def test_later_builder_emits_grammar(self) -> None:
+        # The /later grammar is <HH:MM> <band_low> <band_high> p <spec>,
+        # and the spec rides the named-flag form like every other builder.
+        self.assertIn("'--widen',S.widen", self.ui)
+        self.assertIn("base=['/later',t,lo,hi,'p','--entry',entry,"
+                      "'--sl',sl", self.ui)
+        self.assertIn("'--rr',String(S.rr)", self.ui)
+        self.assertIn("'--risk',String(S.risk)", self.ui)
+        self.assertIn("'--account',S.acct", self.ui)
+        self.assertIn("base.push('--cancel',cc)", self.ui)
+        self.assertIn("base.push('--smart-sl',ss,$('la-tf').value)",
+                      self.ui)
+
+    def test_later_readout_warns_on_inverted_band(self) -> None:
+        # The band is two absolute prices with low strictly below high;
+        # the live preview must say so instead of emitting a command the
+        # bot will refuse.
+        self.assertIn("band low must be below band high", self.ui)
+
+    def test_later_defaults_six_am(self) -> None:
+        # The fire time defaults to 06:00 -- the whole point of /later.
+        self.assertIn('value="06:00"', self.ui)
 
 
 if __name__ == "__main__":

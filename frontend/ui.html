@@ -34,6 +34,8 @@ button:focus-visible{outline:3px solid #ffdd00;outline-offset:-2px}
 #card-alert #form-price>button,#card-alert #form-candle>button,#card-alert #form-ocancel>button{background:#1e4bd2}
 /* Card 3 (working orders): purple accent buttons */
 #card-orders button{background:#7b2ff7}
+/* Card 4 (scheduled pending order): teal accent buttons */
+#card-later button{background:#0b7285}
 </style>
 
 <h1>Cracked Alert <b>v__VERSION__</b></h1>
@@ -102,6 +104,40 @@ function ordReadout(){
 </script>
 
 <script>
+// ---- Scheduled pending order builder (/later) ----
+// Account/Risk/RR/Widen come from the trade card's shared state (S), so
+// the scheduled /p matches what the user would type by hand.
+function laterCmd(){
+  const t=$('la-time').value, lo=$('la-low').value, hi=$('la-high').value;
+  const entry=$('la-entry').value, sl=$('la-sl').value;
+  if(!t||!lo||!hi||!entry||!sl)return null;
+  const base=['/later',t,lo,hi,'p','--entry',entry,'--sl',sl,'--widen',S.widen,'--rr',String(S.rr),'--risk',String(S.risk),'--account',S.acct];
+  const cc=$('la-cancel').value;
+  if(cc)base.push('--cancel',cc);
+  const ss=$('la-smart').value;
+  if(ss)base.push('--smart-sl',ss,$('la-tf').value);
+  return base.join(' ');
+}
+function laterReadout(){
+  const t=$('la-time').value, lo=parseFloat($('la-low').value), hi=parseFloat($('la-high').value);
+  const ro=$('later-readout');
+  let txt='';
+  if(t&&!isNaN(lo)&&!isNaN(hi)){
+    if(lo>=hi){
+      txt='band low must be below band high';
+    }else{
+      const p=t.split(':'), n=new Date(), tgt=new Date(n);
+      tgt.setHours(+p[0],+p[1],0,0);
+      if(tgt.getTime()<=n.getTime()+30000)tgt.setDate(tgt.getDate()+1);
+      txt='next check: '+tgt.toLocaleString()+' \u2014 fires only if price is between '+lo+' and '+hi+'; one shot, then done.';
+    }
+  }
+  ro.textContent=txt;
+  $('later-cmd').textContent=laterCmd()??'';
+}
+</script>
+
+<script>
 // ---- Alert builders ----
 function priceCmd(){
   const p=$('a-price').value, notes=$('a-notes').value;
@@ -127,10 +163,10 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
     <button onclick="seg(this,function(){S.orderType='pending';$('entry-fld').style.display='';ordReadout();});">Pending</button>
   </div>
   <div class="row">
-    <div><label>Account</label><select onchange="S.acct=this.value"><option value="live100k">live100k</option><option value="demo">demo</option></select></div>
-    <div><label>Risk %</label><select onchange="S.risk=parseFloat(this.value);ordReadout();"><option>0.25</option><option selected>0.5</option><option>0.75</option><option>1</option><option>1.5</option><option>2</option></select></div>
-    <div><label>RR</label><select onchange="S.rr=parseFloat(this.value);ordReadout();"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
-    <div><label>Widen</label><select id="widen-sl" onchange="S.widen=this.value"><option value="n">No</option><option value="y">Yes</option></select></div>
+    <div><label>Account</label><select onchange="S.acct=this.value;ordReadout();laterReadout();"><option value="live100k">live100k</option><option value="demo">demo</option></select></div>
+    <div><label>Risk %</label><select onchange="S.risk=parseFloat(this.value);ordReadout();laterReadout();"><option>0.25</option><option selected>0.5</option><option>0.75</option><option>1</option><option>1.5</option><option>2</option></select></div>
+    <div><label>RR</label><select onchange="S.rr=parseFloat(this.value);ordReadout();laterReadout();"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
+    <div><label>Widen</label><select id="widen-sl" onchange="S.widen=this.value;ordReadout();laterReadout();"><option value="n">No</option><option value="y">Yes</option></select></div>
   </div>
   <div class="row" id="entry-fld" style="display:none">
     <div><label>Entry</label><input id="inp-entry" type="number" step="0.01" placeholder="2400.00" oninput="ordReadout()"></div>
@@ -143,6 +179,28 @@ function refresh(){ $('palrt-cmd').textContent=priceCmd()??''; $('calrt-cmd').te
   <div class="cmd" id="trade-cmd"></div>
   <div class="readout" id="trade-readout"></div>
   <button onclick="copy(ordCmd(),$('trade-cmd'))">Copy</button>
+</section>
+
+<section id="card-later">
+  <b>Scheduled pending order</b> <span class="muted">/later</span>
+  <div class="hint">One shot: at the set time, if price is inside the band, the bot places this pending order and tells you; outside, it tells you it skipped. Cancel any time with <code>/later off</code>.</div>
+  <div class="row">
+    <div><label>Time (your clock)</label><input id="la-time" type="time" value="06:00" onchange="laterReadout()"></div>
+    <div><label>Band low</label><input id="la-low" type="number" step="0.01" placeholder="e.g. 4330.00" oninput="laterReadout()"></div>
+    <div><label>Band high</label><input id="la-high" type="number" step="0.01" placeholder="e.g. 4350.00" oninput="laterReadout()"></div>
+  </div>
+  <div class="row">
+    <div><label>Entry</label><input id="la-entry" type="number" step="0.01" placeholder="4336.00" oninput="laterReadout()"></div>
+    <div><label>Original SL</label><input id="la-sl" type="number" step="0.01" placeholder="4330.00" oninput="laterReadout()"></div>
+  </div>
+  <div class="row">
+    <div class="row"><div><label>Smart SL (optional)</label><input id="la-smart" type="number" step="0.01" placeholder="4333.50" oninput="laterReadout()"></div><div><label>Candle TF</label><select id="la-tf" onchange="laterReadout()"><option>M1</option><option selected>M5</option><option>M15</option><option>M30</option><option>H1</option></select></div></div>
+    <div><label>Cancel if hits (optional)</label><input id="la-cancel" type="number" step="0.01" placeholder="e.g. 4360.00" oninput="laterReadout()"></div>
+  </div>
+  <div class="hint">Account, Risk %, RR and Widen follow the Trade card settings above.</div>
+  <div class="cmd" id="later-cmd"></div>
+  <div class="readout" id="later-readout"></div>
+  <button onclick="copy(laterCmd(),$('later-cmd'))">Copy</button>
 </section>
 
 <section id="card-alert">
@@ -262,5 +320,6 @@ if(hasToken())loadOrders();
 
 <script>
 ordReadout();
+laterReadout();
 refresh();
 </script>
