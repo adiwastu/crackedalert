@@ -165,9 +165,10 @@ def candle_cancel_usage() -> str:
 
 def scheduled_usage() -> str:
     return usage("/later",
-                 "<HH:MM> <band_low> <band_high> p <entry> <sl> <widen> "
-                 "<rr> <risk%> <account>",
-                 "/later 06:00 4330 4350 p 4336 4341 n 3 1 5k")
+                 "--time <HH:MM> --band-low <price> --band-high <price> "
+                 "p <entry> <sl> <widen> <rr> <risk%> <account>",
+                 "/later --time 06:00 --band-low 4330 --band-high 4350 "
+                 "p 4336 4330 n 3 1 5k")
 
 
 # --------------------------------------------------------------------------

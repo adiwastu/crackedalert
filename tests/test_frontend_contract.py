@@ -209,11 +209,12 @@ class FrontendContractTest(unittest.TestCase):
         self.assertIn("#0b7285", self.ui)
 
     def test_later_builder_emits_grammar(self) -> None:
-        # The /later grammar is <HH:MM> <band_low> <band_high> p <spec>,
-        # and the spec rides the named-flag form like every other builder.
+        # v2.0.80: the rule parameters ride named flags too, so the whole
+        # /later command is flag-form like every other builder.
+        self.assertIn("base=['/later','--time',t,'--band-low',lo,"
+                      "'--band-high',hi,'p','--entry',entry,'--sl',sl",
+                      self.ui)
         self.assertIn("'--widen',S.widen", self.ui)
-        self.assertIn("base=['/later',t,lo,hi,'p','--entry',entry,"
-                      "'--sl',sl", self.ui)
         self.assertIn("'--rr',String(S.rr)", self.ui)
         self.assertIn("'--risk',String(S.risk)", self.ui)
         self.assertIn("'--account',S.acct", self.ui)

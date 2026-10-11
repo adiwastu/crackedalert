@@ -366,17 +366,30 @@ class LaterArgs:
     spec: str           # pending-order args, /p syntax after the 'p'
 
 
+# Named-flag aliases for the /later rule parameters (the part before
+# the bare 'p' that starts the pending-order spec).
+_LATER_FLAG_NAMES = {
+    "--time": "time", "--at": "time",
+    "--band-low": "low", "--low": "low",
+    "--band-high": "high", "--high": "high",
+}
+
+
 def parse_later(text: str) -> tuple:
     """/later                      -> ("list", None)
        /later off [id]            -> ("off", id or None)
        /later <HH:MM> <band_low> <band_high> p <pending order spec>
                                   -> ("arm", LaterArgs)
+       /later --time <HH:MM> --band-low <price> --band-high <price>
+              p <pending order spec>
+                                  -> ("arm", LaterArgs)
 
-    The spec is exactly what would follow /p (positional or named-flag
-    form) and is validated here with the same parser, so the scheduled
-    order behaves like the one you would have typed yourself. The time
-    is 24h HH:MM on the operator's display clock; the band is two
-    absolute prices, low strictly below high.
+    The bare 'p' separates the rule parameters from the pending-order
+    spec, which is exactly what would follow /p (positional or named-
+    flag form) and is validated here with the same parser, so the
+    scheduled order behaves like the one you would have typed yourself.
+    The time is 24h HH:MM on the operator's display clock; the band is
+    two absolute prices, low strictly below high.
     """
     tokens = text.split()[1:]
     if not tokens:
@@ -388,21 +401,39 @@ def parse_later(text: str) -> tuple:
             return ("off", int(tokens[1]))
         except ValueError:
             raise ParseError("rule id is not a number")
-    if len(tokens) < 5:
-        raise ParseError("usage")
-    fire_time = parse_fire_time(tokens[0])
+    head = []
+    for i, tok in enumerate(tokens):
+        if tok.lower() == "p":
+            head, spec_tokens = tokens[:i], tokens[i + 1:]
+            break
+    else:
+        raise ParseError(
+            "expected 'p' followed by the pending order spec "
+            "(only pending orders are supported)")
+    if head and head[0].startswith("-"):
+        vals, _broadcast = _parse_named(
+            head, _LATER_FLAG_NAMES, required=("time", "low", "high"))
+        fire_time_raw, low_raw, high_raw = (
+            vals["time"], vals["low"], vals["high"])
+    else:
+        if len(head) != 3:
+            raise ParseError(
+                "expected <HH:MM> <band_low> <band_high> before 'p', "
+                "or --time/--band-low/--band-high flags")
+        fire_time_raw, low_raw, high_raw = head
+    fire_time = parse_fire_time(fire_time_raw)
     if fire_time is None:
         raise ParseError("fire time must be 24h HH:MM, e.g. 06:00")
     try:
-        band_low = float(tokens[1])
-        band_high = float(tokens[2])
+        band_low = float(low_raw)
+        band_high = float(high_raw)
     except ValueError:
         raise ParseError("band prices must be numbers")
     if not band_low < band_high:
         raise ParseError("band low must be below band high")
-    if tokens[3].lower() != "p":
-        raise ParseError("only pending orders ('p') are supported")
-    spec = " ".join(tokens[4:])
+    spec = " ".join(spec_tokens)
+    if not spec:
+        raise ParseError("expected the pending order spec after 'p'")
     try:
         parse_trade("/p " + spec, is_market=False)
     except ParseError as e:
@@ -1049,8 +1080,10 @@ class Handlers:
                     _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """Arm / list / cancel a one-shot scheduled pending order.
 
-        /later 06:00 2330 2350 p 2336 2341 n 3 1 5k -- at 06:00 (display
-        clock), if price is inside 2330-2350, place that /p.
+        /later --time 06:00 --band-low 2330 --band-high 2350 p 2336 2341 n 3 1 5k
+        -- at 06:00 (display clock), if price is inside 2330-2350, place
+        that /p. The short positional form (06:00 2330 2350 p ...) works
+        too.
         """
         if not self._allowed(update):
             return

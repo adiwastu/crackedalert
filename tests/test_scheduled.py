@@ -182,6 +182,39 @@ class ParseLaterTests(unittest.TestCase):
         self.assertEqual(args.spec, "--entry 2336 --sl 2341 --widen n "
                                     "--rr 3 --risk 1 --account 5k")
 
+    def test_arm_with_rule_parameter_flags(self):
+        kind, args = parse_later(
+            "/later --time 06:00 --band-low 2330 --band-high 2350 p "
+            + SPEC)
+        self.assertEqual(kind, "arm")
+        self.assertEqual(args, LaterArgs("06:00", 2330.0, 2350.0, SPEC))
+
+    def test_rule_parameter_flag_aliases(self):
+        _, args = parse_later(
+            "/later --at 6:00 --low 2330 --high 2350 p " + SPEC)
+        self.assertEqual(args, LaterArgs("06:00", 2330.0, 2350.0, SPEC))
+
+    def test_flag_mode_requires_all_three_rule_parameters(self):
+        for text in (
+                "/later --time 06:00 --band-low 2330 p " + SPEC,
+                "/later --band-low 2330 --band-high 2350 p " + SPEC,
+                "/later --time 06:00 --band-high 2350 p " + SPEC):
+            with self.assertRaises(ParseError, msg=text):
+                parse_later(text)
+
+    def test_unknown_rule_flag_is_rejected(self):
+        with self.assertRaises(ParseError):
+            parse_later("/later --time 06:00 --band-low 2330 "
+                        "--band-high 2350 --nope x p " + SPEC)
+
+    def test_the_p_separator_is_mandatory(self):
+        for text in (
+                "/later --time 06:00 --band-low 2330 --band-high 2350",
+                "/later 06:00 2330 2350",
+                "/later 06:00 2330 2350 m " + SPEC):
+            with self.assertRaises(ParseError, msg=text):
+                parse_later(text)
+
     def test_the_spec_parses_like_a_real_p(self):
         _, args = parse_later("/later 06:00 2330 2350 p " + SPEC)
         self.assertEqual(parse_trade("/p " + args.spec, False),

@@ -111,7 +111,7 @@ function laterCmd(){
   const t=$('la-time').value, lo=$('la-low').value, hi=$('la-high').value;
   const entry=$('la-entry').value, sl=$('la-sl').value;
   if(!t||!lo||!hi||!entry||!sl)return null;
-  const base=['/later',t,lo,hi,'p','--entry',entry,'--sl',sl,'--widen',S.widen,'--rr',String(S.rr),'--risk',String(S.risk),'--account',S.acct];
+  const base=['/later','--time',t,'--band-low',lo,'--band-high',hi,'p','--entry',entry,'--sl',sl,'--widen',S.widen,'--rr',String(S.rr),'--risk',String(S.risk),'--account',S.acct];
   const cc=$('la-cancel').value;
   if(cc)base.push('--cancel',cc);
   const ss=$('la-smart').value;
