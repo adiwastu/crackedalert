@@ -67,6 +67,11 @@ public class ConfigActivity extends Activity {
         setContentView(R.layout.activity_config);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
+        // Re-register the FCM push token on every open: a token fetched
+        // once never fires onNewToken again, so this is what self-heals
+        // a missed registration (endpoint down at first launch, etc.).
+        FcmRegistrar.registerAsync(this);
+
         urlInput = findViewById(R.id.url_input);
         tokenInput = findViewById(R.id.token_input);
         status = findViewById(R.id.status);

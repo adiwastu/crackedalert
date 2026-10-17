@@ -36,9 +36,11 @@ class DeployContractTest(unittest.TestCase):
     def test_caddy_alert_status_proxy_present(self) -> None:
         # The mobile alarm app polls /alert-status (and /ack) through Caddy,
         # which reverse-proxies them to the bot's in-process endpoint.
+        # /register-fcm is how the app hands the bot its FCM push token.
         text = CADDY_UI_PATH.read_text(encoding="utf-8")
         self.assertIn("handle /alert-status", text)
         self.assertIn("handle /ack", text)
+        self.assertIn("handle /register-fcm", text)
         self.assertIn("reverse_proxy 127.0.0.1:8190", text)
 
     def test_deploy_rewrites_auto_managed_block(self) -> None:
