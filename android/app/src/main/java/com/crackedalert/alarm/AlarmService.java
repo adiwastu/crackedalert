@@ -67,6 +67,13 @@ public class AlarmService extends Service {
     private static final long POLL_MS = 15_000;
     private static final long ACK_RETRY_MS = 2_000;
 
+    // Sleep window on the DEVICE's own clock (the operator's time).
+    // Alerts that arrive inside it are snoozed, never rung, and are not
+    // caught up after the window ends -- the alert still shows in
+    // Telegram. 22:00 inclusive to 05:00 exclusive.
+    private static final int QUIET_FROM_HOUR = 22;
+    private static final int QUIET_TO_HOUR = 5;
+
     private final Object lock = new Object();
     private Thread worker;
     private volatile boolean running = false;
@@ -126,7 +133,10 @@ public class AlarmService extends Service {
             if (s > 0 && s != snoozedSince) {
                 detail = d == null ? "" : d;
                 since = s;
-                if (state != STATE_RINGING) {
+                if (isQuietNow()) {
+                    snoozedSince = since;
+                    lastError = "quiet hours \u2014 ring suppressed";
+                } else if (state != STATE_RINGING) {
                     startRinging();
                 }
             }
@@ -274,16 +284,18 @@ public class AlarmService extends Service {
             if (active) {
                 detail = o.optString("detail", "");
                 since = o.optLong("since", 0);
-                if (state != STATE_RINGING) {
-                    if (since != snoozedSince) {
-                        // A timed-out alert stays quiet; a new one rings.
-                        startRinging();
-                    }
-                } else {
+                if (state == STATE_RINGING) {
                     // Old bug: one failed startPlayer() left state=RINGING
                     // with no sound forever. Retry the sound on every
                     // poll that still sees the alert active.
                     ensureSound();
+                } else if (since == snoozedSince) {
+                    // Timed out or quiet-suppressed earlier: stays quiet.
+                } else if (isQuietNow()) {
+                    snoozedSince = since;
+                    lastError = "quiet hours \u2014 ring suppressed";
+                } else {
+                    startRinging();
                 }
             } else if (state == STATE_RINGING) {
                 // Acknowledged elsewhere; the other phone already acked.
@@ -296,6 +308,13 @@ public class AlarmService extends Service {
             lastError = "bad response: " + e.getMessage();
         }
         broadcast();
+    }
+
+    /** True inside the sleep window (22:00..04:59 device-local). */
+    static boolean isQuietNow() {
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        int hour = c.get(java.util.Calendar.HOUR_OF_DAY);
+        return hour >= QUIET_FROM_HOUR || hour < QUIET_TO_HOUR;
     }
 
     /** POST /ack until success. */
