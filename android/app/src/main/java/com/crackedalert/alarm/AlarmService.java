@@ -55,6 +55,7 @@ public class AlarmService extends Service {
     public static final String EXTRA_SINCE = "since";
     public static final String EXTRA_LAST_POLL = "lastPoll";
     public static final String EXTRA_ERROR = "error";
+    public static final String EXTRA_URGENT = "urgent";
 
     static final int STATE_IDLE = 0;
     static final int STATE_RINGING = 1;
@@ -126,14 +127,16 @@ public class AlarmService extends Service {
             // FCM data message: the authoritative "an alert is live"
             // signal. Wake the poll loop (the process may have been
             // dead) and ring immediately instead of waiting up to a
-            // poll interval.
+            // poll interval. Urgent pushes (the token-dead alarm) ring
+            // through the quiet window on purpose.
             String d = intent.getStringExtra(EXTRA_DETAIL);
             long s = intent.getLongExtra(EXTRA_SINCE, 0);
+            boolean urgent = intent.getBooleanExtra(EXTRA_URGENT, false);
             startMonitoring();
             if (s > 0 && s != snoozedSince) {
                 detail = d == null ? "" : d;
                 since = s;
-                if (isQuietNow()) {
+                if (!urgent && isQuietNow()) {
                     snoozedSince = since;
                     lastError = "quiet hours \u2014 ring suppressed";
                 } else if (state != STATE_RINGING) {

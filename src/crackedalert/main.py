@@ -36,6 +36,8 @@ from .fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back,
                   candle_high, candle_low, fresh_imbalance, gap_bounds,
                   just_closed_ts, zone_name)
 from .nested_fvg import nested_entries
+from .quiet_hours import (HeldMessageStore, build_digest, is_quiet_now,
+                          seconds_until_window_end)
 from .scheduled_order import ScheduledOrderRunner, ScheduledOrderStore
 from .wave_state import WaveService, WaveStateStore, bar_close_time
 from .zone_watch import (WATCH_TIMEFRAMES, ZoneWatch, ZoneWatchStore,
@@ -181,19 +183,65 @@ async def _run_bot(settings: Settings) -> None:
 
     status_server.set_register_fcm(register_fcm)
 
-    async def push_alert(text: str) -> None:
+    # Quiet hours (22:00-05:00 display clock): alert messages are held
+    # and flushed as one digest at the window's end. Urgent messages
+    # (the token-dead alarm) bypass the hold AND ring the phone through
+    # its own quiet window via the push `urgent` flag.
+    held_store = HeldMessageStore(settings.db_file)
+
+    def in_quiet_hours() -> bool:
+        return is_quiet_now(time.time(), settings.display_utc_offset)
+
+    async def push_alert(text: str, urgent: bool = False) -> None:
         if fcm_sender is None:
             return
         try:
             await fcm_sender.push_all("Cracked Alert", text,
-                                      active_alert.since)
+                                      active_alert.since, urgent=urgent)
         except Exception:
             log.exception("fcm push failed")
 
-    async def notify(chat_id: int, text: str) -> None:
+    async def deliver(chat_id: int, text: str,
+                      urgent: bool = False) -> None:
+        if urgent or not in_quiet_hours():
+            await app.bot.send_message(chat_id, text,
+                                       parse_mode=ParseMode.HTML)
+        else:
+            held_store.add(chat_id, text, int(time.time()))
+
+    async def notify(chat_id: int, text: str, urgent: bool = False) -> None:
         active_alert.set(text)
-        await push_alert(text)
-        await app.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+        await push_alert(text, urgent)
+        await deliver(chat_id, text, urgent)
+
+    async def flush_held() -> None:
+        rows = held_store.all()
+        if not rows:
+            return
+        for chat_id, message in build_digest(rows,
+                                             settings.display_utc_offset):
+            try:
+                await app.bot.send_message(chat_id, message,
+                                           parse_mode=ParseMode.HTML)
+            except Exception:
+                log.warning("quiet-hours digest to chat %s failed",
+                            chat_id)
+        held_store.clear()
+        log.info("quiet-hours digest flushed: %d held message(s)",
+                 len(rows))
+
+    async def digest_watcher() -> None:
+        # A restart after the window ended with unflushed holds: flush now.
+        if held_store.all() and not in_quiet_hours():
+            await flush_held()
+        while True:
+            now = time.time()
+            await asyncio.sleep(max(
+                5.0, seconds_until_window_end(now,
+                                              settings.display_utc_offset))
+                + 2)
+            if held_store.all():
+                await flush_held()
 
     feed_account = settings.accounts[settings.price_feed_account]
 
@@ -204,12 +252,16 @@ async def _run_bot(settings: Settings) -> None:
     # fix -- ping the operator at a sane rate with the consent link; the
     # pasted-redirect handler below completes the recovery.
     async def token_dead_alert(e: Exception) -> None:
+        # urgent: bypasses the quiet-hours hold AND rings the phone
+        # through its own sleep window -- the bot cannot trade without
+        # the operator re-authorizing, whatever the hour.
         await notify(
             settings.allowed_chat_ids[0],
             fmt.token_dead_alert(
                 str(e),
                 authorize_url(settings.ctrader_client_id,
-                              settings.ctrader_redirect_uri)))
+                              settings.ctrader_redirect_uri)),
+            urgent=True)
 
     selfheal_refresh = make_selfheal_refresh(tokens, token_dead_alert)
 
@@ -373,8 +425,7 @@ async def _run_bot(settings: Settings) -> None:
         await push_alert(text)
         for cid in subscription_store.all_ids():
             try:
-                await app.bot.send_message(cid, text,
-                                           parse_mode=ParseMode.HTML)
+                await deliver(cid, text)
             except Exception:
                 log.warning("broadcast to chat %s failed", cid)
 
@@ -638,7 +689,8 @@ async def _run_bot(settings: Settings) -> None:
                      fmt.token_dead_alert(
                          reason,
                          authorize_url(settings.ctrader_client_id,
-                                       settings.ctrader_redirect_uri)))
+                                       settings.ctrader_redirect_uri)),
+                     urgent=True)
 
     refresh_task = asyncio.get_running_loop().create_task(
         tokens.refresh_loop(on_failure=on_token_failure))
@@ -798,6 +850,8 @@ async def _run_bot(settings: Settings) -> None:
     scheduled_task = asyncio.get_running_loop().create_task(
         scheduled_runner.run())
 
+    digest_task = asyncio.get_running_loop().create_task(digest_watcher())
+
     for cli in clients.values():
         cli.start()
     candle_feed.start()
@@ -827,6 +881,7 @@ async def _run_bot(settings: Settings) -> None:
 
     refresh_task.cancel()
     scheduled_task.cancel()
+    digest_task.cancel()
     await candle_feed.stop()
     for cli in clients.values():
         await cli.stop()
@@ -837,6 +892,7 @@ async def _run_bot(settings: Settings) -> None:
     subscription_store.close()
     scheduled_store.close()
     fcm_store.close()
+    held_store.close()
     log.info("shut down cleanly")
 
 

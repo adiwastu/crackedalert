@@ -127,16 +127,24 @@ class FCMTokenStore:
 
 
 def build_message(device_token: str, title: str, body: str,
-                  since: float) -> dict:
-    """Data-only, high-priority push. Data values must be strings."""
+                  since: float, urgent: bool = False) -> dict:
+    """Data-only, high-priority push. Data values must be strings.
+
+    urgent=1 tells the app to ring through its own quiet window (used
+    only by the token-dead alarm, the one message that must reach the
+    operator even asleep).
+    """
+    data = {
+        "title": title,
+        "detail": body,
+        "since": str(int(since)),
+    }
+    if urgent:
+        data["urgent"] = "1"
     return {
         "message": {
             "token": device_token,
-            "data": {
-                "title": title,
-                "detail": body,
-                "since": str(int(since)),
-            },
+            "data": data,
             "android": {"priority": "HIGH"},
         }
     }
@@ -190,11 +198,12 @@ class FcmSender:
         return self._access_token
 
     def _send_one(self, device_token: str, title: str, body: str,
-                  since: float) -> None:
+                  since: float, urgent: bool = False) -> None:
         access = self._get_access_token()
         url = FCM_SEND_URL.format(project=self._sa.project_id)
         payload = json.dumps(
-            build_message(device_token, title, body, since)).encode()
+            build_message(device_token, title, body, since,
+                          urgent)).encode()
         status, resp = self._post(url, payload, {
             "Content-Type": "application/json; charset=UTF-8",
             "Authorization": "Bearer %s" % access,
@@ -202,7 +211,8 @@ class FcmSender:
         if status >= 400:
             raise FCMSendError(status, resp[:200].decode("utf-8", "replace"))
 
-    async def push_all(self, title: str, body: str, since: float) -> None:
+    async def push_all(self, title: str, body: str, since: float,
+                       urgent: bool = False) -> None:
         """Fan out to every registered phone; never raises.
 
         Tokens the server no longer knows (app uninstalled, registration
@@ -216,7 +226,7 @@ class FcmSender:
         for token in tokens:
             try:
                 await asyncio.to_thread(self._send_one, token, title,
-                                        body, since)
+                                        body, since, urgent)
                 sent += 1
             except FCMSendError as e:
                 if e.status in _TOKEN_GONE_STATUS:

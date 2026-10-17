@@ -43,6 +43,11 @@ public class FcmService extends FirebaseMessagingService {
                 } catch (NumberFormatException ignored) {
                 }
             }
+            if ("1".equals(data.get("urgent"))) {
+                // The bot only marks the token-dead alarm urgent: it
+                // rings through the quiet window on purpose.
+                i.putExtra(AlarmService.EXTRA_URGENT, true);
+            }
         }
         // A high-priority FCM delivery grants the temporary background
         // exemption that makes this foreground-service start legal.

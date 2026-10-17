@@ -82,6 +82,12 @@ class BuildMessageTests(unittest.TestCase):
         # A notification block would stop onMessageReceived from firing
         # while the app is backgrounded, killing the full-screen alarm.
         self.assertNotIn("notification", msg["message"])
+        self.assertNotIn("urgent", msg["message"]["data"])
+
+    def test_urgent_flag_rides_the_data(self):
+        msg = build_message("devtoken", "Cracked Alert",
+                            "tokens dead", 1_700_000_000.7, urgent=True)
+        self.assertEqual(msg["message"]["data"]["urgent"], "1")
 
 
 class FCMTokenStoreTests(unittest.TestCase):
