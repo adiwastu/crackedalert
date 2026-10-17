@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "879064867017",
+    "project_id": "cracked-alert",
+    "storage_bucket": "cracked-alert.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:879064867017:android:e2ebcaf405f3cebc6fad18",
+        "android_client_info": {
+          "package_name": "com.crackedalert.alarm"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDu2-b2PVHrwBtFbqD0TK5ZI1PTosmQ16g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
