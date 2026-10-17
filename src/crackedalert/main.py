@@ -24,13 +24,14 @@ from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
 from .bot.handlers import Handlers, order_success_text, parse_trade
 from .bot.subscriptions import SubscriptionStore
-from .config import ConfigError, Settings, load_settings
+from .config import ConfigError, Settings, load_settings, fcm_service_account
 from .ctrader import client as ct
 from .ctrader.candles import CandleFeed
 from .ctrader.market import MarketData
 from .ctrader.tokens import (TokenError, TokenStore, authorize_url,
                              make_selfheal_refresh)
 from .ctrader.trading import TradingService, TradeRejected
+from .fcm import FcmSender, FCMTokenStore, load_service_account
 from .fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back,
                   candle_high, candle_low, fresh_imbalance, gap_bounds,
                   just_closed_ts, zone_name)
@@ -159,8 +160,39 @@ async def _run_bot(settings: Settings) -> None:
         token=settings.alert_status_token, active=active_alert,
         port=settings.alert_status_port)
 
+    # FCM push: registered phones get a high-priority data message the
+    # moment an alert goes active (delivered through Doze, wakes the
+    # app), instead of waiting for the app's next poll. Disabled unless
+    # a service-account file is configured; the app's poll loop stays
+    # as the fallback either way.
+    fcm_store = FCMTokenStore(settings.db_file)
+    fcm_sender = None
+    fcm_sa_path = fcm_service_account()
+    if fcm_sa_path:
+        try:
+            fcm_sender = FcmSender(load_service_account(fcm_sa_path),
+                                   fcm_store)
+            log.info("fcm push enabled (service account: %s)", fcm_sa_path)
+        except Exception as e:
+            log.warning("fcm push disabled: bad service account: %s", e)
+
+    async def register_fcm(device_token: str) -> bool:
+        return fcm_store.add(device_token)
+
+    status_server.set_register_fcm(register_fcm)
+
+    async def push_alert(text: str) -> None:
+        if fcm_sender is None:
+            return
+        try:
+            await fcm_sender.push_all("Cracked Alert", text,
+                                      active_alert.since)
+        except Exception:
+            log.exception("fcm push failed")
+
     async def notify(chat_id: int, text: str) -> None:
         active_alert.set(text)
+        await push_alert(text)
         await app.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
 
     feed_account = settings.accounts[settings.price_feed_account]
@@ -338,6 +370,7 @@ async def _run_bot(settings: Settings) -> None:
     async def broadcast(text: str) -> None:
         """Send a message to every subscriber (auto trade alerts)."""
         active_alert.set(text)
+        await push_alert(text)
         for cid in subscription_store.all_ids():
             try:
                 await app.bot.send_message(cid, text,
@@ -803,6 +836,7 @@ async def _run_bot(settings: Settings) -> None:
     zone_store.close()
     subscription_store.close()
     scheduled_store.close()
+    fcm_store.close()
     log.info("shut down cleanly")
 
 

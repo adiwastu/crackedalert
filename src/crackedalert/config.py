@@ -131,3 +131,15 @@ def load_settings() -> Settings:
         display_utc_offset=float(
             os.environ.get("DISPLAY_UTC_OFFSET", "0").strip() or "0"),
     )
+
+
+def fcm_service_account() -> str:
+    """Path to the FCM service-account JSON, or "" when not configured.
+
+    Empty env var or a missing file disables push; the alarm app then
+    falls back to polling GET /alert-status as before.
+    """
+    raw = os.environ.get("FCM_SERVICE_ACCOUNT_FILE", "").strip()
+    if not raw:
+        return ""
+    return raw if os.path.isfile(raw) else ""

@@ -15,6 +15,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 
@@ -32,10 +33,13 @@ import java.nio.charset.StandardCharsets;
 /**
  * Foreground service implementing the ALARM_APP.md contract:
  *   - polls GET /alert-status every ~15 s (X-Alert-Token auth)
- *   - on active: full-screen looping alarm (sound + vibration), never auto-stops
+ *   - on FCM push (primary trigger) or an active poll: full-screen
+ *     looping alarm (sound + vibration)
+ *   - rings at most ring_secs (user setting; 0 = until dismissed), then
+ *     quiets for THAT alert (snooze) -- a newer alert re-rings
  *   - keeps ringing on network errors (keeps the previous decision)
- *   - DISMISS -> POST /ack, retried until it succeeds; ring continues meanwhile
- *   - if another phone acked, next poll sees inactive and we stop ringing
+ *   - DISMISS -> POST /ack, retried until it succeeds
+ *   - if another phone acked, next poll sees inactive and we stop
  */
 public class AlarmService extends Service {
 
@@ -44,6 +48,7 @@ public class AlarmService extends Service {
     public static final String ACTION_ACK = "com.crackedalert.alarm.ACK";
     public static final String ACTION_FORCE_STOP = "com.crackedalert.alarm.FORCE_STOP";
     public static final String ACTION_STATUS = "com.crackedalert.alarm.STATUS";
+    public static final String ACTION_PUSH = "com.crackedalert.alarm.PUSH";
 
     public static final String EXTRA_STATE = "state";
     public static final String EXTRA_DETAIL = "detail";
@@ -74,6 +79,8 @@ public class AlarmService extends Service {
     private MediaPlayer player;
     private Vibrator vibrator;
     private PowerManager.WakeLock ringLock;
+    private volatile long ringStartedAt = 0;   // elapsedRealtime ms
+    private volatile long snoozedSince = -1;   // alert we timed out on
     private String baseUrl = "";
     private String token = "";
 
@@ -108,6 +115,23 @@ public class AlarmService extends Service {
             startAcking();
             return START_STICKY;
         }
+        if (ACTION_PUSH.equals(action)) {
+            // FCM data message: the authoritative "an alert is live"
+            // signal. Wake the poll loop (the process may have been
+            // dead) and ring immediately instead of waiting up to a
+            // poll interval.
+            String d = intent.getStringExtra(EXTRA_DETAIL);
+            long s = intent.getLongExtra(EXTRA_SINCE, 0);
+            startMonitoring();
+            if (s > 0 && s != snoozedSince) {
+                detail = d == null ? "" : d;
+                since = s;
+                if (state != STATE_RINGING) {
+                    startRinging();
+                }
+            }
+            return START_STICKY;
+        }
         if (baseUrl.isEmpty() || token.isEmpty()) {
             stopSelf();
             return START_NOT_STICKY;
@@ -134,7 +158,11 @@ public class AlarmService extends Service {
     private void startMonitoring() {
         startForeground(NOTIF_MONITOR, monitorNotification("Monitoring alerts"));
         synchronized (lock) {
-            if (worker == null || !worker.isAlive()) {
+            // The old isAlive()-only check raced: a START arriving while
+            // a STOP was still tearing the old worker down (isAlive()
+            // true for a few ms after running=false) skipped the spawn,
+            // leaving a live service with NO poll loop until reboot.
+            if (worker == null || !worker.isAlive() || !running) {
                 worker = new Thread(new Runnable() {
                     @Override
                     public void run() {
@@ -177,6 +205,7 @@ public class AlarmService extends Service {
                     }
                 } else {
                     pollOnce();
+                    checkRingTimeout();
                 }
             } catch (Throwable t) {
                 lastError = String.valueOf(t.getMessage());
@@ -188,6 +217,33 @@ public class AlarmService extends Service {
                 break;
             }
         }
+    }
+
+    /**
+     * Ring timeout: after ring_secs (0 = never) the alarm quiets itself
+     * and snoozes THAT alert (matched by its `since`), so a later poll
+     * of the same alert does not re-ring. A NEW alert (new since) rings
+     * normally. This is the backstop for "it rang forever with no way
+     * to stop it" -- even with no notification and no UI, it stops.
+     */
+    private void checkRingTimeout() {
+        if (state != STATE_RINGING || ringStartedAt == 0) {
+            return;
+        }
+        long secs = getSharedPreferences(ConfigActivity.PREFS, MODE_PRIVATE)
+                .getInt(ConfigActivity.KEY_RING_SECS, 300);
+        if (secs <= 0) {
+            return;
+        }
+        if (SystemClock.elapsedRealtime() - ringStartedAt < secs * 1000L) {
+            return;
+        }
+        snoozedSince = since;
+        synchronized (lock) {
+            state = STATE_IDLE;
+        }
+        stopRinging();
+        broadcast();
     }
 
     /** One GET /alert-status. Keeps the previous decision on any failure. */
@@ -219,7 +275,15 @@ public class AlarmService extends Service {
                 detail = o.optString("detail", "");
                 since = o.optLong("since", 0);
                 if (state != STATE_RINGING) {
-                    startRinging();
+                    if (since != snoozedSince) {
+                        // A timed-out alert stays quiet; a new one rings.
+                        startRinging();
+                    }
+                } else {
+                    // Old bug: one failed startPlayer() left state=RINGING
+                    // with no sound forever. Retry the sound on every
+                    // poll that still sees the alert active.
+                    ensureSound();
                 }
             } else if (state == STATE_RINGING) {
                 // Acknowledged elsewhere; the other phone already acked.
@@ -309,6 +373,7 @@ public class AlarmService extends Service {
             }
             state = STATE_RINGING;
         }
+        ringStartedAt = SystemClock.elapsedRealtime();
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (pm != null) {
             ringLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "crackedalarm:ring");
@@ -347,6 +412,7 @@ public class AlarmService extends Service {
             ringLock.release();
             ringLock = null;
         }
+        ringStartedAt = 0;
         getSystemService(NotificationManager.class).cancel(NOTIF_ALARM);
         synchronized (lock) {
             if (state == STATE_ACKING) {
@@ -360,9 +426,29 @@ public class AlarmService extends Service {
         broadcast();
     }
 
+    private void ensureSound() {
+        // The player can die (transient media error); while the alert is
+        // still active, every poll retries it instead of staying silent.
+        if (player == null) {
+            startPlayer();
+        }
+    }
+
     private void startPlayer() {
         try {
-            Uri uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+            SharedPreferences p = getSharedPreferences(
+                    ConfigActivity.PREFS, MODE_PRIVATE);
+            Uri uri = null;
+            String sound = p.getString(ConfigActivity.KEY_SOUND, "").trim();
+            if (!sound.isEmpty()) {
+                try {
+                    uri = Uri.parse(sound);
+                } catch (Exception ignored) {
+                }
+            }
+            if (uri == null) {
+                uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+            }
             if (uri == null) {
                 uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
             }
@@ -374,6 +460,10 @@ public class AlarmService extends Service {
             player.setDataSource(this, uri);
             player.setLooping(true);
             player.prepare();
+            // Multiplier over the system's Alarm volume (0..100).
+            int vol = p.getInt(ConfigActivity.KEY_VOLUME, 100);
+            float f = Math.max(0, Math.min(100, vol)) / 100f;
+            player.setVolume(f, f);
             player.start();
         } catch (Exception e) {
             lastError = "sound failed: " + e.getMessage();
@@ -387,6 +477,14 @@ public class AlarmService extends Service {
         i.putExtra(EXTRA_SINCE, since);
         PendingIntent pi = PendingIntent.getActivity(this, 2, i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        // Stop lives ON the notification: even if the full-screen
+        // activity is gone (or the OEM lets this be swiped away), there
+        // is always a one-tap way to kill the ringing. The ring timeout
+        // backstops everything.
+        Intent stop = new Intent(this, AlarmService.class)
+                .setAction(ACTION_FORCE_STOP);
+        PendingIntent stopPi = PendingIntent.getService(this, 3, stop,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification n = new Notification.Builder(this, CH_ALARM)
                 .setSmallIcon(R.drawable.ic_stat)
                 .setContentTitle("ALERT ACTIVE")
@@ -397,6 +495,8 @@ public class AlarmService extends Service {
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setAutoCancel(false)
                 .setContentIntent(pi)
+                .addAction(new Notification.Action(R.drawable.ic_stat,
+                        "Stop", stopPi))
                 .build();
         getSystemService(NotificationManager.class).notify(NOTIF_ALARM, n);
     }

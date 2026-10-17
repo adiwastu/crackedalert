@@ -8,14 +8,23 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 /**
@@ -30,11 +39,18 @@ public class ConfigActivity extends Activity {
     static final String KEY_TOKEN = "token";
     static final String KEY_ENABLED = "enabled";
     static final String KEY_STATUS = "status";
+    static final String KEY_SOUND = "sound";      // ringtone uri, "" = default
+    static final String KEY_VOLUME = "volume";    // 0..100 multiplier
+    static final String KEY_RING_SECS = "ring_secs"; // 0 = until dismissed
+
+    private static final int REQ_PICK_SOUND = 2;
 
     private EditText urlInput;
     private EditText tokenInput;
     private TextView status;
     private SharedPreferences prefs;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private MediaPlayer testPlayer;
 
     private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
         @Override
@@ -94,6 +110,167 @@ public class ConfigActivity extends Activity {
                 openBatterySettings();
             }
         });
+
+        wireSoundControls();
+        wireVolumeBar();
+        wireRingTimeout();
+    }
+
+    private void wireSoundControls() {
+        final Button soundBtn = findViewById(R.id.sound_btn);
+        soundBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent i = new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
+                i.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE,
+                        RingtoneManager.TYPE_ALARM);
+                i.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true);
+                i.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false);
+                String saved = prefs.getString(KEY_SOUND, "");
+                if (!saved.isEmpty()) {
+                    i.putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                            Uri.parse(saved));
+                }
+                startActivityForResult(i, REQ_PICK_SOUND);
+            }
+        });
+        refreshSoundLabel();
+
+        findViewById(R.id.test_btn).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                testRing();
+            }
+        });
+    }
+
+    private void refreshSoundLabel() {
+        String saved = prefs.getString(KEY_SOUND, "");
+        String name = "System default alarm";
+        if (!saved.isEmpty()) {
+            RingtoneManager rm = new RingtoneManager(this);
+            try {
+                rm.setType(RingtoneManager.TYPE_ALARM);
+                android.media.Ringtone r = rm.getRingtone(this, Uri.parse(saved));
+                if (r != null) {
+                    name = r.getTitle(this);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        ((Button) findViewById(R.id.sound_btn)).setText("Alarm sound: " + name);
+    }
+
+    private void testRing() {
+        stopTestRing();
+        try {
+            String saved = prefs.getString(KEY_SOUND, "");
+            Uri uri = saved.isEmpty()
+                    ? RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    : Uri.parse(saved);
+            testPlayer = new MediaPlayer();
+            testPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build());
+            testPlayer.setDataSource(this, uri);
+            testPlayer.prepare();
+            int vol = prefs.getInt(KEY_VOLUME, 100);
+            float f = Math.max(0, Math.min(100, vol)) / 100f;
+            testPlayer.setVolume(f, f);
+            testPlayer.start();
+            status.setText("Test ringing for 4s at " + vol
+                    + "% — the volume slider on screen while this plays is"
+                    + " the phone's Alarm volume.");
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    stopTestRing();
+                }
+            }, 4000);
+        } catch (Exception e) {
+            stopTestRing();
+            status.setText("Test failed: " + e.getMessage());
+        }
+    }
+
+    private void stopTestRing() {
+        if (testPlayer != null) {
+            try {
+                testPlayer.stop();
+            } catch (Exception ignored) {
+            }
+            testPlayer.release();
+            testPlayer = null;
+        }
+    }
+
+    private void wireVolumeBar() {
+        SeekBar bar = findViewById(R.id.volume_bar);
+        bar.setProgress(prefs.getInt(KEY_VOLUME, 100));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress,
+                                          boolean fromUser) {
+                if (fromUser) {
+                    prefs.edit().putInt(KEY_VOLUME, progress).apply();
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+    }
+
+    private void wireRingTimeout() {
+        final String[] labels = {"Until dismissed", "After 1 minute",
+                "After 2 minutes", "After 5 minutes", "After 10 minutes"};
+        final int[] values = {0, 60, 120, 300, 600};
+        Spinner spinner = findViewById(R.id.ring_spinner);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, labels);
+        adapter.setDropDownViewResource(
+                android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        int saved = prefs.getInt(KEY_RING_SECS, 300);
+        int sel = 3;                       // 5 minutes (the default)
+        for (int i = 0; i < values.length; i++) {
+            if (values[i] == saved) {
+                sel = i;
+            }
+        }
+        spinner.setSelection(sel);
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view,
+                                       int position, long id) {
+                prefs.edit().putInt(KEY_RING_SECS, values[position]).apply();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode,
+                                    Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_PICK_SOUND && resultCode == RESULT_OK) {
+            Uri picked = data != null
+                    ? data.getParcelableExtra(
+                          RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+                    : null;
+            prefs.edit().putString(KEY_SOUND,
+                    picked != null ? picked.toString() : "").apply();
+            refreshSoundLabel();
+        }
     }
 
     @Override
@@ -116,6 +293,7 @@ public class ConfigActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        stopTestRing();
         try {
             unregisterReceiver(statusReceiver);
         } catch (Exception ignored) {

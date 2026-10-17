@@ -31,6 +31,16 @@ Routes (all require the ``ALERT_STATUS_TOKEN`` as ``?token=`` or the
                                                      alert superseded it)
         -> 401 {"error": "unauthorized"}
 
+    POST /register-fcm   (JSON body: {"token": "<fcm device token>"})
+        -> 200 {"ok": true, "devices": <n>}         (registered)
+        -> 400 {"error": "no token"}                (missing body token)
+        -> 503 {"error": "fcm registration unavailable"} (not wired)
+
+    The alarm app registers its Firebase device token once (and whenever
+    Firebase rotates it), so the bot can push the alert instead of
+    waiting for the app's next poll. The token is opaque to this server:
+    it is stored and echoed to FCM, nothing else.
+
     The alarm app sends the alert's ``since`` timestamp with /ack. The
     server clears only if it matches the currently-active alert, so a
     retried/stale ack can never silence a newer alert that re-armed in
@@ -111,7 +121,8 @@ class AlertStatusServer:
 
     def __init__(self, token: str, active: ActiveAlert,
                  host: str = "127.0.0.1", port: int = 8190,
-                 orders_provider: Optional[Callable[[], Awaitable[dict]]] = None
+                 orders_provider: Optional[Callable[[], Awaitable[dict]]] = None,
+                 register_fcm: Optional[Callable[[str], Awaitable[bool]]] = None
                  ) -> None:
         self._token = token
         self._active = active
@@ -120,11 +131,18 @@ class AlertStatusServer:
         # orders_provider: async callable -> {"accounts": {...}}; wired by
         # main.py once the TradingService exists (see set_orders_provider).
         self._orders_provider = orders_provider
+        # register_fcm: async (device_token) -> bool (True when new);
+        # absent when the bot has no FCM credentials configured.
+        self._register_fcm = register_fcm
         self._server: Optional[asyncio.AbstractServer] = None
 
     def set_orders_provider(self, provider) -> None:
         """Attach (or swap) the async callable backing GET /orders."""
         self._orders_provider = provider
+
+    def set_register_fcm(self, register) -> None:
+        """Attach the async callable backing POST /register-fcm."""
+        self._register_fcm = register
 
     async def _handle(self, reader: asyncio.StreamReader,
                       writer: asyncio.StreamWriter) -> None:
@@ -140,8 +158,9 @@ class AlertStatusServer:
                 return
 
             # Read request headers (auth may ride in X-Alert-Token) and
-            # discard any small body.
+            # any small body (the FCM registration carries JSON).
             headers = {}
+            content_length = 0
             while True:
                 line = await reader.readline()
                 if line in (b"", b"\r\n", b"\n"):
@@ -150,9 +169,23 @@ class AlertStatusServer:
                     break
                 name, _, value = line.decode("latin-1").partition(":")
                 if name.strip():
-                    headers[name.strip().lower()] = value.strip()
+                    lname = name.strip().lower()
+                    headers[lname] = value.strip()
+                    if lname == "content-length":
+                        try:
+                            content_length = int(value.strip())
+                        except ValueError:
+                            content_length = 0
+            body = b""
+            if 0 < content_length <= 65536:
+                try:
+                    body = await asyncio.wait_for(
+                        reader.readexactly(content_length), timeout=5)
+                except (asyncio.IncompleteReadError,
+                        asyncio.TimeoutError):
+                    body = b""
 
-            await self._dispatch(writer, method, target, headers)
+            await self._dispatch(writer, method, target, headers, body)
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         finally:
@@ -163,7 +196,8 @@ class AlertStatusServer:
                 pass
 
     async def _dispatch(self, writer, method: str, target: str,
-                        headers: Optional[dict] = None) -> None:
+                        headers: Optional[dict] = None,
+                        body: bytes = b"") -> None:
         parsed = urlsplit(target)
         token = self._query_param(parsed.query, "token")
         if not token:
@@ -202,8 +236,36 @@ class AlertStatusServer:
                     cleared = True
             await self._respond(
                 writer, 200, _json({"ok": True, "cleared": cleared}))
+        elif method == "POST" and path == "/register-fcm":
+            await self._respond_register_fcm(writer, body)
         else:
             await self._respond(writer, 404, _json({"error": "not found"}))
+
+    async def _respond_register_fcm(self, writer, body: bytes) -> None:
+        """POST /register-fcm: remember a device token for pushes."""
+        if self._register_fcm is None:
+            await self._respond(
+                writer, 503,
+                _json({"error": "fcm registration unavailable"}))
+            return
+        try:
+            device_token = str(json.loads(body.decode("utf-8")).get(
+                "token", "")).strip()
+        except Exception:
+            device_token = ""
+        if not device_token or len(device_token) > 4096:
+            await self._respond(writer, 400, _json({"error": "no token"}))
+            return
+        try:
+            is_new = await self._register_fcm(device_token)
+        except Exception as e:
+            log.warning("fcm registration failed: %s", e)
+            await self._respond(
+                writer, 500, _json({"error": "registration failed"}))
+            return
+        log.info("fcm: device registered (%s)", "new" if is_new else
+                 "already known")
+        await self._respond(writer, 200, _json({"ok": True}))
 
     async def _respond_orders(self, writer) -> None:
         """GET /orders: working orders per account from the UI provider."""
