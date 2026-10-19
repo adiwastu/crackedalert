@@ -1,6 +1,7 @@
 """The regime machine: two-strike flips, absorbed opposite zones, the
 store, and flip-note parsing (see bias.py)."""
 
+import asyncio
 import shutil
 import tempfile
 import unittest
@@ -125,6 +126,70 @@ class BiasStoreTests(unittest.TestCase):
         # A restart reads the same row.
         machine2 = BiasMachine(BiasStore(self.dir + "/test.db"))
         self.assertEqual(machine2.status().strikes, 1)
+
+
+class FlipHookIntegrationTests(unittest.TestCase):
+    """The full path that missed a real flip in production: a candle
+    alert with a flip note fires through the engine and must reach the
+    machine. Guards the field name too (the alert's text is `message`,
+    not `note`)."""
+
+    def test_a_firing_flip_alert_counts_through_the_engine(self):
+        import asyncio
+        import tempfile
+        from crackedalert.alerts import (CANDLE_BELOW, CandleAlertEngine,
+                                         CandleAlertStore)
+        from crackedalert.wave import Bar
+
+        dirpath = tempfile.mkdtemp()
+        try:
+            candle_store = CandleAlertStore(dirpath + "/candles.db")
+            machine = BiasMachine(BiasStore(dirpath + "/bias.db"))
+            machine.set(BULLISH)
+
+            async def on_fired(alert):
+                flipped = flipped_kind_from_note(alert.message or "")
+                if flipped is not None:
+                    machine.flip(flipped)
+
+            async def noop(*args, **kwargs):
+                pass
+
+            engine = CandleAlertEngine(candle_store, noop,
+                                       lambda alert: "fired",
+                                       on_fired=on_fired)
+            candle_store.create(1, "XAUUSD", "H1", 100.0, CANDLE_BELOW,
+                                "strike 1 of FLIP to the DOWNSIDE. WATCH!",
+                                broadcast=True)
+            candle_store.create(1, "XAUUSD", "H1", 200.0, CANDLE_BELOW,
+                                "masuk DH1. WATCH!", broadcast=True)
+            # Close below 100 fires the flip alert; 200 is untouched.
+            run(engine.on_closed_bar(
+                "XAUUSD", "H1",
+                Bar(ts=1000, open=110, high=111, low=95, close=99)))
+            self.assertEqual(machine.status().bias, BULLISH)
+            self.assertEqual(machine.status().strikes, 1)
+            # The hourly watcher arms a fresh flip alert with every new
+            # imbalance, so the next zone carries the next strike.
+            candle_store.create(1, "XAUUSD", "H1", 95.0, CANDLE_BELOW,
+                                "strike 1 of FLIP to the DOWNSIDE. WATCH!",
+                                broadcast=True)
+            # And the second one flips the regime.
+            run(engine.on_closed_bar(
+                "XAUUSD", "H1",
+                Bar(ts=1060, open=98, high=99, low=90, close=92)))
+            self.assertEqual(machine.status().bias, BEARISH)
+            self.assertEqual(machine.status().strikes, 0)
+        finally:
+            shutil.rmtree(dirpath, ignore_errors=True)
+
+
+def run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 if __name__ == "__main__":

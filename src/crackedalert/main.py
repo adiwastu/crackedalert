@@ -529,7 +529,7 @@ async def _run_bot(settings: Settings) -> None:
     bias_machine = BiasMachine(BiasStore(settings.db_file))
 
     async def on_candle_fired(alert) -> None:
-        flipped = flipped_kind_from_note(alert.note or "")
+        flipped = flipped_kind_from_note(alert.message or "")
         if flipped is None:
             return
         outcome = bias_machine.flip(flipped)
