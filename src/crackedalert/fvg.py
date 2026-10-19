@@ -147,6 +147,11 @@ class ImbalanceGate:
     def last_seen(self) -> Optional[int]:
         return self._last_seen
 
+    @last_seen.setter
+    def last_seen(self, ts: Optional[int]) -> None:
+        """Seed the marker (e.g. from persisted storage at startup)."""
+        self._last_seen = ts
+
     def admit(self, newest_ts: int) -> bool:
         """Record an imbalance completing on the bar opening at newest_ts
         (UTC minutes) and say whether it should alert."""

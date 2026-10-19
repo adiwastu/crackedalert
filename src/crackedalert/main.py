@@ -38,6 +38,7 @@ from .fcm import FcmSender, FCMTokenStore, load_service_account
 from .fvg import (IMBALANCE_ALERT_SPECS, ImbalanceGate, back_to_back,
                   candle_high, candle_low, fresh_imbalance, gap_bounds,
                   just_closed_ts, zone_name)
+from .imbalance_seen import ImbalanceSeenStore
 from .nested_fvg import nested_entries
 from .quiet_hours import (HeldMessageStore, build_digest, is_quiet_now,
                           seconds_until_window_end)
@@ -719,8 +720,14 @@ async def _run_bot(settings: Settings) -> None:
     # completed candle forms a fresh imbalance. One trendbar fetch/hour.
     # ------------------------------------------------------------------
     # Remember which imbalance each check last saw, so a continuation is
-    # only skipped if its first candle was really handled.
+    # only skipped if its first candle was really handled. The marker is
+    # persisted: a boundary missed to a deploy or crash is caught up at
+    # startup, without re-announcing one that already went out.
+    imbalance_seen = ImbalanceSeenStore(settings.db_file)
     imbalance_gate = ImbalanceGate(period=60)
+    stored_seen = imbalance_seen.last_seen()
+    if stored_seen is not None:
+        imbalance_gate.last_seen = stored_seen
 
     async def recent_bars(period: str, count: int = 6) -> list:
         """The latest completed bars on `period`, oldest first."""
@@ -795,6 +802,7 @@ async def _run_bot(settings: Settings) -> None:
                      "ts=%s was already seen -- skipping as back to back",
                      which, newest_ts, previous)
             return
+        imbalance_seen.save(newest_ts)
         text = "new %s imbalance on H1" % which
         # An imbalance against the bias is context, not a regime change:
         # "supply created -- but we're still bullish."
@@ -857,7 +865,14 @@ async def _run_bot(settings: Settings) -> None:
                      which, entry.level, entry.note)
 
     async def imbalance_watcher() -> None:
-        """Check shortly after every UTC hour boundary."""
+        """Check shortly after every UTC hour boundary -- and once right
+        now: a boundary missed to a deploy or crash must not silently
+        skip the newest candle's imbalance. The persisted seen-marker
+        keeps the catch-up duplicate-safe across restarts."""
+        try:
+            await check_h1_imbalance()
+        except Exception:
+            log.exception("startup H1 imbalance check failed")
         while True:
             now = time.time()
             next_hour = (int(now // 3600) + 1) * 3600
@@ -915,6 +930,7 @@ async def _run_bot(settings: Settings) -> None:
     scheduled_store.close()
     fcm_store.close()
     held_store.close()
+    imbalance_seen.close()
     log.info("shut down cleanly")
 
 
