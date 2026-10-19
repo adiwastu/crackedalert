@@ -43,8 +43,6 @@ from .quiet_hours import (HeldMessageStore, build_digest, is_quiet_now,
                           seconds_until_window_end)
 from .scheduled_order import ScheduledOrderRunner, ScheduledOrderStore
 from .wave_state import WaveService, WaveStateStore, bar_close_time
-from .zone_watch import (WATCH_TIMEFRAMES, ZoneWatch, ZoneWatchStore,
-                         zone_label)
 
 log = logging.getLogger("crackedalert.main")
 
@@ -489,23 +487,14 @@ async def _run_bot(settings: Settings) -> None:
     for _env, cli in clients.items():
         cli.add_event_handler(ct.PT_EXECUTION_EVENT, on_execution)
 
-    # After a DH1 / S H1 zone is touched, broadcast every break on the
-    # watched timeframes until the first CHoCH.
-    zone_store = ZoneWatchStore(settings.db_file)
-    zone_watch = ZoneWatch(
-        zone_store, broadcast, utc_offset=settings.display_utc_offset,
-        # Late bound: wave_service is built below. Only read on a touch.
-        structure=lambda symbol, timeframe: wave_service.state(
-            symbol, timeframe))
-
-    async def on_zone_touch(alert) -> None:
-        await zone_watch.on_touch(
-            alert.symbol, zone_label(alert.direction, alert.cc_timeframe),
-            alert.target)
-
+    # The zone-watch feature (M5 BOS/CHoCH broadcast after a zone touch,
+    # until the first CHoCH) is retired for now: the operator no longer
+    # wants M5 structure chatter. zone_watch.py keeps the full
+    # implementation; re-enabling is a wiring change here. The touch
+    # alerts themselves are untouched -- they fire through the engine
+    # below, exactly as before.
     engine = AlertEngine(store, notify, fmt.alert_fired,
-                         on_broadcast=broadcast,
-                         on_zone_touch=on_zone_touch)
+                         on_broadcast=broadcast)
     feed = FeedService(markets[feed_account.environment],
                        feed_account.ctid_account_id, engine)
     markets[feed_account.environment].add_tick_listener(feed.on_tick)
@@ -586,7 +575,6 @@ async def _run_bot(settings: Settings) -> None:
                  event.kind, event.direction, event.symbol,
                  event.timeframe, event.level, when,
                  event.valid_high, event.valid_low)
-        await zone_watch.on_wave_event(event)
 
     wave_service = WaveService(
         wave_store,
@@ -604,10 +592,6 @@ async def _run_bot(settings: Settings) -> None:
                              markets[feed_account.environment],
                              feed_account.ctid_account_id,
                              [candle_engine, wave_service])
-    # Zone watches need structure on these timeframes whether or not any
-    # candle alert happens to be using them.
-    for timeframe in WATCH_TIMEFRAMES:
-        candle_feed.pin(settings.trade_symbol, timeframe)
 
     def make_on_connected(env: str):
         async def on_connected() -> None:
@@ -927,7 +911,6 @@ async def _run_bot(settings: Settings) -> None:
     store.close()
     candle_store.close()
     wave_store.close()
-    zone_store.close()
     subscription_store.close()
     scheduled_store.close()
     fcm_store.close()
