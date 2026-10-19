@@ -49,13 +49,13 @@ class FlipOutcome:
 
     kind: 'strike' (counted, regime unchanged), 'regime_flip' (strikes
     hit 2 -- the bias flipped), 'absorbed' (a flip in the bias's favor:
-    the flipped zone now acts as the bias's own kind), 'seeded' (there
-    was no bias yet; the flip founded one).
+    the old zone is dead, but nothing transforms -- a proper new zone
+    has to form before the area is treated as the bias's own kind),
+    'seeded' (there was no bias yet; the flip founded one).
     """
     kind: str
     state: BiasState
     flipped: str          # 'demand' | 'supply' -- the zone that flipped
-    flipped_into: str     # what the flipped zone acts as now
 
 
 def flipped_kind_from_note(note: str) -> Optional[str]:
@@ -87,6 +87,10 @@ def on_zone_flip(bias: Optional[BiasState], flipped: str,
     With no bias yet, the flip founds one pointing in the flip's own
     direction (a demand zone flipping is bearish evidence), strikes at
     1 -- the next flip of the SAME kind against that bias is strike 2.
+
+    A flip in the bias's favor only kills the old zone. It does NOT
+    transform it: the area becomes demand/supply only when a proper new
+    imbalance forms there, which the hourly watcher announces on its own.
     """
     now = int(time.time()) if now is None else now
     if bias is None or not bias.bias:
@@ -95,7 +99,7 @@ def on_zone_flip(bias: Optional[BiasState], flipped: str,
             kind="seeded",
             state=BiasState(new_bias, 1, "seeded by %s flip" % flipped,
                             now),
-            flipped=flipped, flipped_into=flip_into(new_bias, flipped))
+            flipped=flipped)
     if flipped == zone_kind(bias.bias):
         # A flip against the bias: demand died while bullish.
         strikes = bias.strikes + 1
@@ -106,37 +110,24 @@ def on_zone_flip(bias: Optional[BiasState], flipped: str,
                 state=BiasState(new_bias, 0,
                                 "%s flipped twice" % zone_label(flipped),
                                 now),
-                flipped=flipped,
-                flipped_into=flip_into(new_bias, flipped))
+                flipped=flipped)
         return FlipOutcome(
             kind="strike",
             state=BiasState(bias.bias, strikes, "strike %d" % strikes,
                             now),
-            flipped=flipped, flipped_into=flip_into(bias.bias, flipped))
-    # A flip in the bias's favor: supply dying while bullish. The
-    # flipped zone changes sides and keeps serving the bias.
+            flipped=flipped)
+    # A flip in the bias's favor: supply dying while bullish. The old
+    # zone is gone; no transformation until a proper one forms.
     return FlipOutcome(
         kind="absorbed",
         state=BiasState(bias.bias, bias.strikes,
                         "%s absorbed" % zone_label(flipped), now),
-        flipped=flipped, flipped_into=flip_into(bias.bias, flipped))
+        flipped=flipped)
 
 
 def zone_kind(bias: str) -> str:
     """The zone kind whose flip strikes against this bias."""
     return DEMAND if bias == BULLISH else SUPPLY
-
-
-def flip_into(bias: str, flipped: str) -> str:
-    """What a flipped zone acts as, from the operator's chair.
-
-    While bullish, a flipped supply is demand; while bearish, a flipped
-    demand is supply. A zone that flipped against the bias acts as the
-    new regime's own kind after the regime flips.
-    """
-    if bias == BULLISH:
-        return DEMAND if flipped == SUPPLY else SUPPLY
-    return SUPPLY if flipped == DEMAND else DEMAND
 
 
 def strike_message(outcome: FlipOutcome) -> str:
@@ -155,11 +146,13 @@ def regime_flip_message(outcome: FlipOutcome) -> str:
 
 
 def absorbed_message(outcome: FlipOutcome) -> str:
-    return ("%s flipped \u2014 still <b>%s</b>: the flipped %s now acts "
-            "as %s (%s). Watching for touches."
+    # The kind a proper new zone would need to form as, to serve the
+    # current bias: demand while bullish, supply while bearish.
+    needed = zone_kind(outcome.state.bias)
+    return ("%s flipped \u2014 still <b>%s</b>. A flip alone doesn't "
+            "make it %s: waiting for a proper %s to form there first."
             % (zone_label(outcome.flipped), outcome.state.bias,
-               outcome.flipped, outcome.flipped_into,
-               zone_label(outcome.flipped_into)))
+               needed, needed))
 
 
 def seeded_message(outcome: FlipOutcome) -> str:

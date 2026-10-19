@@ -554,17 +554,10 @@ async def _run_bot(settings: Settings) -> None:
         elif outcome.kind == "seeded":
             await broadcast(seeded_message(outcome))
         elif outcome.kind == "absorbed":
-            # The flipped zone changes sides and keeps serving the bias:
-            # re-arm its origin as a touch alert, watched like any other
-            # H1 zone (touch -> M5 structure until CHoCH).
-            store.create(
-                settings.allowed_chat_ids[0], settings.trade_symbol,
-                alert.target,
-                CROSSING_DOWN if outcome.flipped_into == "demand"
-                else CROSSING_UP,
-                "flipped %s, now %s" % (zone_label(outcome.flipped),
-                                        zone_label(outcome.flipped_into)),
-                kind=KIND_ZONE, cc_timeframe="H1", broadcast=True)
+            # The old zone is dead. No transformation: whether the area
+            # becomes the bias's own kind is decided by a proper new
+            # imbalance forming there, which the hourly watcher already
+            # announces on its own.
             await broadcast(absorbed_message(outcome))
 
     candle_engine = CandleAlertEngine(candle_store, notify, fmt.candle_alert_fired,

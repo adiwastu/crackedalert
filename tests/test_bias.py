@@ -20,7 +20,6 @@ class OnZoneFlipTests(unittest.TestCase):
         out = on_zone_flip(BULL, DEMAND, NOW)
         self.assertEqual(out.kind, "strike")
         self.assertEqual(out.state, BiasState(BULLISH, 1, "strike 1", NOW))
-        self.assertEqual(out.flipped_into, SUPPLY)
 
     def test_second_demand_flip_flips_the_regime(self):
         one = on_zone_flip(BULL, DEMAND, NOW)
@@ -28,16 +27,12 @@ class OnZoneFlipTests(unittest.TestCase):
         self.assertEqual(out.kind, "regime_flip")
         self.assertEqual(out.state.bias, BEARISH)
         self.assertEqual(out.state.strikes, 0)
-        # After the regime flips, the flipped demand serves the new
-        # bearish regime as supply.
-        self.assertEqual(out.flipped_into, SUPPLY)
 
-    def test_supply_flip_while_bullish_is_absorbed(self):
+    def test_supply_flip_while_bullish_is_absorbed_not_transformed(self):
         out = on_zone_flip(BULL, SUPPLY, NOW)
         self.assertEqual(out.kind, "absorbed")
         self.assertEqual(out.state.bias, BULLISH)
         self.assertEqual(out.state.strikes, 0)
-        self.assertEqual(out.flipped_into, DEMAND)
         # Absorbing does not clear an existing strike.
         struck = on_zone_flip(BULL, DEMAND, NOW)
         out2 = on_zone_flip(struck.state, SUPPLY, NOW + 1)
@@ -53,7 +48,6 @@ class OnZoneFlipTests(unittest.TestCase):
         self.assertEqual(out2.state.bias, BULLISH)
         out3 = on_zone_flip(bear, DEMAND, NOW)         # demand died: absorbed
         self.assertEqual(out3.kind, "absorbed")
-        self.assertEqual(out3.flipped_into, SUPPLY)
 
     def test_no_bias_is_seeded_by_the_flip(self):
         out = on_zone_flip(None, DEMAND, NOW)
@@ -93,11 +87,12 @@ class MessageTests(unittest.TestCase):
         text = regime_flip_message(on_zone_flip(one.state, DEMAND, NOW))
         self.assertIn("BEARISH", text)
 
-    def test_absorbed_message_says_still_bullish(self):
+    def test_absorbed_message_waits_for_a_proper_zone(self):
         text = absorbed_message(on_zone_flip(BULL, SUPPLY, NOW))
         self.assertIn("still", text)
         self.assertIn("bullish", text)
-        self.assertIn("acts as demand", text)
+        self.assertIn("proper demand", text)
+        self.assertNotIn("acts as", text)
 
     def test_seeded_message_tells_the_operator(self):
         text = seeded_message(on_zone_flip(None, DEMAND, NOW))
