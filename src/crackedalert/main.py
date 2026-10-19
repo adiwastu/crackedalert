@@ -868,11 +868,20 @@ async def _run_bot(settings: Settings) -> None:
         """Check shortly after every UTC hour boundary -- and once right
         now: a boundary missed to a deploy or crash must not silently
         skip the newest candle's imbalance. The persisted seen-marker
-        keeps the catch-up duplicate-safe across restarts."""
-        try:
-            await check_h1_imbalance()
-        except Exception:
-            log.exception("startup H1 imbalance check failed")
+        keeps the catch-up duplicate-safe across restarts.
+
+        The startup check retries for about a minute: the watcher task
+        starts before the websocket connects, so the first attempts race
+        the link (the hourly loop never saw that -- its first tick is a
+        full hour in)."""
+        for attempt in range(7):
+            try:
+                await check_h1_imbalance()
+                break
+            except Exception:
+                log.exception("startup H1 imbalance check failed "
+                              "(attempt %d)", attempt + 1)
+                await asyncio.sleep(10)
         while True:
             now = time.time()
             next_hour = (int(now // 3600) + 1) * 3600
