@@ -411,13 +411,19 @@ class CandleAlertEngine:
                  format_fired: Formatter,
                  on_close_hit: Optional[Callable] = None,
                  on_broadcast: Optional[Broadcaster] = None,
-                 on_alert_removed: Optional[Callable[[], None]] = None):
+                 on_alert_removed: Optional[Callable[[], None]] = None,
+                 on_fired: Optional[Callable] = None):
         self._store = store
         self._notify = notify
         self._format = format_fired
         self._on_close_hit = on_close_hit
         self._on_broadcast = on_broadcast
         self._on_alert_removed = on_alert_removed
+        # on_fired(alert): sees every firing alert with its full row
+        # (note, target, timeframe) before any delivery path. The regime
+        # machine counts zone flips from it; failures never block the
+        # alert itself.
+        self._on_fired = on_fired
 
     def _removed(self) -> None:
         if self._on_alert_removed is not None:
@@ -438,6 +444,13 @@ class CandleAlertEngine:
             log.info("candle alert %s fired: %s %s closed %.5f vs %s",
                      alert.id, alert.symbol, alert.timeframe, close,
                      alert.target)
+
+            if self._on_fired is not None:
+                try:
+                    await self._on_fired(alert)
+                except Exception:
+                    log.exception("on_fired callback failed for candle "
+                                  "alert %s", alert.id)
 
             if alert.action == "close" and self._on_close_hit is not None:
                 try:

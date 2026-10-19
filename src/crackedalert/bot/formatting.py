@@ -171,6 +171,33 @@ def scheduled_usage() -> str:
                  "p 4336 4330 n 3 1 5k")
 
 
+def bias_usage() -> str:
+    return usage("/bias", "[bullish|bearish]",
+                 "/bias bearish")
+
+
+def bias_status(state) -> str:
+    if state is None:
+        return ("no regime bias on record yet \u2014 it forms on the "
+                "first zone flip, or set it: <code>/bias bullish</code>")
+    strikes_left = 2 - state.strikes
+    return "\n".join([
+        "regime bias: <b>%s</b>" % esc(state.bias),
+        "strikes against: %d of 2 (%s)"
+        % (state.strikes,
+           "regime flips on the next one" if strikes_left <= 0
+           else "%d more flips the regime" % strikes_left),
+        "note: %s" % (esc(state.note) or "\u2013"),
+    ])
+
+
+def bias_set(state) -> str:
+    return ("regime bias set: <b>%s</b> \u2014 strikes reset. "
+            "%s zones are home now; flips of them are strikes."
+            % (esc(state.bias),
+               "Demand" if state.bias == "bullish" else "Supply"))
+
+
 # --------------------------------------------------------------------------
 # cancelled / not-found / no-alerts
 # --------------------------------------------------------------------------
@@ -707,6 +734,7 @@ BOT_COMMANDS = [
     ("m", "market order"),
     ("p", "pending order"),
     ("later", "one-shot: place a /p at a time if price is in a band"),
+    ("bias", "show or set the regime bias (two-strike flips)"),
     ("be", "SL to breakeven"),
     ("guard", "candle-close guard on an open position"),
     ("ocancel", "cancel an unfilled order if price hits a level"),

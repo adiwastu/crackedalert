@@ -18,8 +18,11 @@ from telegram.ext import Application
 
 from .alerts import (AlertEngine, AlertStore, CandleAlertEngine,
                      CandleAlertStore, CANDLE_ABOVE, CANDLE_BELOW,
-                     KIND_ZONE)
+                     CROSSING_DOWN, CROSSING_UP, KIND_ZONE)
 from .alert_status import ActiveAlert, AlertStatusServer
+from .bias import (BiasMachine, BiasStore, absorbed_message,
+                   flipped_kind_from_note, regime_flip_message,
+                   seeded_message, strike_message, zone_label)
 from .bot import formatting as fmt
 from .bot.formatting import BOT_COMMANDS
 from .bot.handlers import Handlers, order_success_text, parse_trade
@@ -528,10 +531,47 @@ async def _run_bot(settings: Settings) -> None:
         cancelled, or their position closed on the stream)."""
         candle_feed.sync_keys(candle_store.active_keys())
 
+    # ------------------------------------------------------------------
+    # The operator's regime: a bias with a two-strike flip rule. Zone
+    # flips are counted from the imbalance watcher's own flip alerts
+    # ("strike 1 of FLIP ..."); the counter is persisted, so restarts
+    # never lose it. /bias in chat views or overrides the state.
+    # ------------------------------------------------------------------
+    bias_machine = BiasMachine(BiasStore(settings.db_file))
+
+    async def on_candle_fired(alert) -> None:
+        flipped = flipped_kind_from_note(alert.note or "")
+        if flipped is None:
+            return
+        outcome = bias_machine.flip(flipped)
+        log.info("bias: %s zone flipped -> %s (bias=%s, strikes=%d)",
+                 flipped, outcome.kind, outcome.state.bias,
+                 outcome.state.strikes)
+        if outcome.kind == "strike":
+            await broadcast(strike_message(outcome))
+        elif outcome.kind == "regime_flip":
+            await broadcast(regime_flip_message(outcome))
+        elif outcome.kind == "seeded":
+            await broadcast(seeded_message(outcome))
+        elif outcome.kind == "absorbed":
+            # The flipped zone changes sides and keeps serving the bias:
+            # re-arm its origin as a touch alert, watched like any other
+            # H1 zone (touch -> M5 structure until CHoCH).
+            store.create(
+                settings.allowed_chat_ids[0], settings.trade_symbol,
+                alert.target,
+                CROSSING_DOWN if outcome.flipped_into == "demand"
+                else CROSSING_UP,
+                "flipped %s, now %s" % (zone_label(outcome.flipped),
+                                        zone_label(outcome.flipped_into)),
+                kind=KIND_ZONE, cc_timeframe="H1", broadcast=True)
+            await broadcast(absorbed_message(outcome))
+
     candle_engine = CandleAlertEngine(candle_store, notify, fmt.candle_alert_fired,
                                       on_close_hit=on_cc_close,
                                       on_broadcast=broadcast,
-                                      on_alert_removed=_sync_candle_feed)
+                                      on_alert_removed=_sync_candle_feed,
+                                      on_fired=on_candle_fired)
     # Market structure engine. Nothing acts on its calls yet: it only
     # logs, so the operator can compare what it reports against what
     # they would have called by eye before anything depends on it.
@@ -677,7 +717,8 @@ async def _run_bot(settings: Settings) -> None:
                         watch_subscribe=watch_subscribe,
                         imbalance_checker=lambda: imbalance_verdict(),
                         token_recovery=token_recovery,
-                        scheduled=scheduled_runner)
+                        scheduled=scheduled_runner,
+                        bias=bias_machine)
     handlers.register(app)
 
     # P2: native command menu
@@ -778,6 +819,11 @@ async def _run_bot(settings: Settings) -> None:
                      which, newest_ts, previous)
             return
         text = "new %s imbalance on H1" % which
+        # An imbalance against the bias is context, not a regime change:
+        # "supply created -- but we're still bullish."
+        bias_state = bias_machine.status()
+        if bias_state is not None and which != bias_state.bias:
+            text += (" \u2014 but we're still %s" % bias_state.bias)
         log.info("H1 imbalance: %s", text)
         await broadcast(text)
         # Auto-create the two --all alerts for this setup: a price alert

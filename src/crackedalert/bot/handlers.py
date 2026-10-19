@@ -720,7 +720,8 @@ class Handlers:
                  cancel_watch: Optional[dict] = None,
                  watch_subscribe=None,
                  token_recovery=None,
-                 scheduled=None):
+                 scheduled=None,
+                 bias=None):
         # feed: FeedService -- async ensure(symbol) -> Optional[(bid, ask)]
         # trader: TradingService (None only in Phase-2-era wiring/tests)
         # candle_store: CandleAlertStore; candle_feed: CandleFeed
@@ -734,6 +735,7 @@ class Handlers:
         # token_recovery: async code -> status string (main.py). Exchanges
         #   a pasted OAuth code for fresh tokens when the grant is dead.
         # scheduled: ScheduledOrderRunner (main.py) backing /later.
+        # bias: BiasMachine (main.py) behind /bias.
         self._settings = settings
         self._store = store
         self._feed = feed
@@ -748,6 +750,7 @@ class Handlers:
         self._watch_subscribe = watch_subscribe
         self._token_recovery = token_recovery
         self._scheduled = scheduled
+        self._bias = bias
 
     def register(self, app: Application) -> None:
         # un-gated commands
@@ -768,6 +771,7 @@ class Handlers:
         app.add_handler(CommandHandler("cancellast", self.cancel_last))
         app.add_handler(CommandHandler("cancelall", self.cancel_all))
         app.add_handler(CommandHandler("later", self.later))
+        app.add_handler(CommandHandler("bias", self.bias))
         app.add_handler(CommandHandler("be", self.breakeven))
         app.add_handler(CommandHandler("guard", self.guard))
         app.add_handler(CommandHandler("ocancel", self.ocancel))
@@ -1075,6 +1079,35 @@ class Handlers:
                 account, 0, "internal error"))
             return
         await self._reply(update, fmt.cancel_all_result(account, results))
+
+    async def bias(self, update: Update,
+                   _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show or override the regime bias.
+
+        /bias               -> current state
+        /bias bullish       -> set bias, strikes reset
+        /bias bearish       -> set bias, strikes reset
+        """
+        if not self._allowed(update):
+            return
+        if self._bias is None:
+            await self._reply(update, "bias tracking is not wired up.")
+            return
+        tokens = (update.effective_message.text or "").split()[1:]
+        if tokens:
+            word = tokens[0].lower()
+            if word not in ("bullish", "bearish"):
+                await self._reply(update, fmt.bias_usage())
+                return
+            state = self._bias.set(word)
+            log.info("bias set to %s via /bias", word)
+            await self._reply(update, fmt.bias_set(state))
+            return
+        state = self._bias.status()
+        if state is None:
+            await self._reply(update, fmt.bias_status(None))
+            return
+        await self._reply(update, fmt.bias_status(state))
 
     async def later(self, update: Update,
                     _ctx: ContextTypes.DEFAULT_TYPE) -> None:
