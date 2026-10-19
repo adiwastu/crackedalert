@@ -1,13 +1,13 @@
 """Quiet hours for Telegram delivery and the overnight digest.
 
-Between 22:00 and 05:00 on the operator's display clock, alert
+Between 23:00 and 06:00 on the operator's display clock, alert
 messages are HELD instead of sent; when the window ends they go out as
 one chronological digest. Urgent messages (the token-dead alarm, the
 one thing that needs the operator even asleep) bypass the hold -- both
 here and, via the push `urgent` flag, in the phone app's own quiet
 window.
 
-The phone app has its own 22:00-05:00 ring suppression; this module
+The phone app has its own 23:00-06:00 ring suppression; this module
 only governs Telegram delivery. A held message is not lost on restart:
 holds live in SQLite and the digest flushes on the next window end (or
 immediately at startup if the window already passed).
@@ -17,8 +17,8 @@ import sqlite3
 import time
 from typing import List, Tuple
 
-QUIET_FROM_HOUR = 22
-QUIET_TO_HOUR = 5
+QUIET_FROM_HOUR = 23
+QUIET_TO_HOUR = 6
 
 # Telegram's hard message limit is 4096 chars; stay well under it so a
 # header + bullets always fit.

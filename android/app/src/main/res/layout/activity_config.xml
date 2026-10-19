@@ -20,7 +20,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="20dp"
-            android:text="Rings 05:00–22:00 (quiet 22:00–05:00). Alerts still show in Telegram at night. Auto-stops after the ring timeout."
+            android:text="Rings 06:00–23:00 (quiet 23:00–06:00). Alerts still show in Telegram at night. Auto-stops after the ring timeout."
             android:textColor="#666"
             android:textSize="14sp" />
 

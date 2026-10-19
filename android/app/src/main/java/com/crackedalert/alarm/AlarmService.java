@@ -71,9 +71,9 @@ public class AlarmService extends Service {
     // Sleep window on the DEVICE's own clock (the operator's time).
     // Alerts that arrive inside it are snoozed, never rung, and are not
     // caught up after the window ends -- the alert still shows in
-    // Telegram. 22:00 inclusive to 05:00 exclusive.
-    private static final int QUIET_FROM_HOUR = 22;
-    private static final int QUIET_TO_HOUR = 5;
+    // Telegram. 23:00 inclusive to 06:00 exclusive.
+    private static final int QUIET_FROM_HOUR = 23;
+    private static final int QUIET_TO_HOUR = 6;
 
     private final Object lock = new Object();
     private Thread worker;

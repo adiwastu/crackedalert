@@ -17,15 +17,15 @@ def utc(year, month, day, hour, minute=0, second=0):
 
 
 class IsQuietNowTests(unittest.TestCase):
-    OFF = 7.0    # WIB: quiet 22:00-04:59 local == 15:00-21:59 UTC
+    OFF = 7.0    # WIB: quiet 23:00-05:59 local == 16:00-22:59 UTC
 
     def test_window_boundaries_local(self):
         cases = [
-            (utc(2026, 10, 17, 14, 59), False),  # 21:59 local
-            (utc(2026, 10, 17, 15, 0), True),    # 22:00 local
+            (utc(2026, 10, 17, 15, 59), False),  # 22:59 local
+            (utc(2026, 10, 17, 16, 0), True),    # 23:00 local
             (utc(2026, 10, 17, 18, 0), True),    # 01:00 local (next day)
-            (utc(2026, 10, 17, 21, 59), True),   # 04:59 local
-            (utc(2026, 10, 17, 22, 0), False),   # 05:00 local
+            (utc(2026, 10, 17, 22, 59), True),   # 05:59 local
+            (utc(2026, 10, 17, 23, 0), False),   # 06:00 local
             (utc(2026, 10, 17, 12, 0), False),   # 19:00 local
         ]
         for now, expected in cases:
@@ -33,15 +33,17 @@ class IsQuietNowTests(unittest.TestCase):
                              "utc %s" % time_str(now))
 
     def test_zero_offset(self):
-        self.assertTrue(is_quiet_now(utc(2026, 10, 17, 22, 30), 0.0))
-        self.assertFalse(is_quiet_now(utc(2026, 10, 17, 21, 59), 0.0))
-        self.assertFalse(is_quiet_now(utc(2026, 10, 17, 5, 0), 0.0))
-        self.assertTrue(is_quiet_now(utc(2026, 10, 17, 4, 59), 0.0))
+        self.assertTrue(is_quiet_now(utc(2026, 10, 17, 23, 30), 0.0))
+        self.assertFalse(is_quiet_now(utc(2026, 10, 17, 22, 59), 0.0))
+        self.assertFalse(is_quiet_now(utc(2026, 10, 17, 6, 0), 0.0))
+        self.assertTrue(is_quiet_now(utc(2026, 10, 17, 5, 59), 0.0))
 
     def test_negative_offset(self):
-        # UTC-5 (EST): quiet 22:00-04:59 local == 03:00-09:59 UTC.
+        # UTC-5 (EST): quiet 23:00-05:59 local == 04:00-10:59 UTC.
         self.assertTrue(is_quiet_now(utc(2026, 10, 17, 4, 0), -5.0))
-        self.assertFalse(is_quiet_now(utc(2026, 10, 17, 10, 0), -5.0))
+        self.assertTrue(is_quiet_now(utc(2026, 10, 17, 10, 59), -5.0))
+        self.assertFalse(is_quiet_now(utc(2026, 10, 17, 11, 0), -5.0))
+        self.assertFalse(is_quiet_now(utc(2026, 10, 17, 3, 59), -5.0))
 
 
 def time_str(ts):
@@ -52,17 +54,17 @@ def time_str(ts):
 class SecondsUntilWindowEndTests(unittest.TestCase):
     OFF = 7.0
 
-    def test_next_end_is_always_05_local(self):
-        # 23:00 local Sat (16:00 UTC) -> 05:00 local Sun (22:00 UTC Sun).
+    def test_next_end_is_always_06_local(self):
+        # 23:30 local Sat (16:30 UTC) -> 06:00 local Sun (23:00 UTC Sun).
         self.assertEqual(
-            seconds_until_window_end(utc(2026, 10, 17, 16, 0), self.OFF),
-            utc(2026, 10, 17, 22, 0) - utc(2026, 10, 17, 16, 0))
+            seconds_until_window_end(utc(2026, 10, 17, 16, 30), self.OFF),
+            utc(2026, 10, 17, 23, 0) - utc(2026, 10, 17, 16, 30))
 
     def test_inside_window_counts_to_todays_end(self):
-        # 02:00 local Sat (19:00 UTC Fri... keep Sat) -> 05:00 local Sat.
+        # 02:00 local Sat (19:00 UTC) -> 06:00 local Sat (23:00 UTC Sat).
         self.assertEqual(
             seconds_until_window_end(utc(2026, 10, 17, 19, 0), self.OFF),
-            utc(2026, 10, 17, 22, 0) - utc(2026, 10, 17, 19, 0))
+            utc(2026, 10, 17, 23, 0) - utc(2026, 10, 17, 19, 0))
 
     def test_positive_value_always(self):
         for hour in range(24):
