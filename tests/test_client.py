@@ -157,6 +157,105 @@ class ConnectionLifecycle(unittest.TestCase):
 
         run(scenario())
 
+    def test_dead_account_session_kicks_a_reconnect(self):
+        """The gateway can kill the account session while the websocket
+        stays open; the request then fails with 'Trading account is not
+        authorized' forever unless the client drops the socket so the
+        runner reconnects and re-authenticates (this is the Nov 6
+        outage)."""
+
+        class DeadSessionWS(FakeWS):
+            async def send(self, raw: str) -> None:
+                msg = json.loads(raw)
+                self.sent.append(msg)
+                pt = msg.get("payloadType")
+                reply = None
+                if pt == ct.PT_APPLICATION_AUTH_REQ:
+                    reply = ct.PT_APPLICATION_AUTH_RES
+                elif pt == ct.PT_ACCOUNT_AUTH_REQ:
+                    reply = ct.PT_ACCOUNT_AUTH_RES
+                elif pt == ct.PT_GET_TRENDBARS_REQ:
+                    await self._queue.put({
+                        "clientMsgId": msg.get("clientMsgId"),
+                        "payloadType": ct.PT_ERROR_RES,
+                        "payload": {
+                            "errorCode": "INVALID_REQUEST",
+                            "description":
+                                "Trading account is not authorized.",
+                        },
+                    })
+                    return
+                if reply is not None:
+                    await self._queue.put({
+                        "clientMsgId": msg.get("clientMsgId"),
+                        "payloadType": reply,
+                        "payload": {},
+                    })
+
+        async def scenario():
+            ws = DeadSessionWS()
+            with mock.patch.object(ct.websockets, "connect",
+                                   FakeConnect(ws)):
+                cli = self._client(ws)
+                cli.start()
+                await cli.wait_ready(timeout=3)
+                with self.assertRaises(ct.CTraderError):
+                    # The caller still sees the rejection...
+                    await cli.request(ct.PT_GET_TRENDBARS_REQ, {},
+                                      timeout=3)
+                # ...but the client must have dropped the socket so the
+                # runner reconnects and re-authenticates the account.
+                self.assertTrue(ws._closed)
+                self.assertGreater(cli._last_session_kick, 0)
+                await cli.stop()
+
+        run(scenario())
+
+    def test_other_errors_do_not_kick_the_session(self):
+        class OtherErrorWS(FakeWS):
+            async def send(self, raw: str) -> None:
+                msg = json.loads(raw)
+                self.sent.append(msg)
+                pt = msg.get("payloadType")
+                if pt == ct.PT_APPLICATION_AUTH_REQ:
+                    reply, payload = ct.PT_APPLICATION_AUTH_RES, {}
+                elif pt == ct.PT_ACCOUNT_AUTH_REQ:
+                    reply, payload = ct.PT_ACCOUNT_AUTH_RES, {}
+                elif pt == ct.PT_GET_TRENDBARS_REQ:
+                    await self._queue.put({
+                        "clientMsgId": msg.get("clientMsgId"),
+                        "payloadType": ct.PT_ERROR_RES,
+                        "payload": {
+                            "errorCode": "MARKET_CLOSED",
+                            "description": "The market is closed.",
+                        },
+                    })
+                    return
+                else:
+                    return
+                await self._queue.put({
+                    "clientMsgId": msg.get("clientMsgId"),
+                    "payloadType": reply,
+                    "payload": payload,
+                })
+
+        async def scenario():
+            ws = OtherErrorWS()
+            with mock.patch.object(ct.websockets, "connect",
+                                   FakeConnect(ws)):
+                cli = self._client(ws)
+                cli.start()
+                await cli.wait_ready(timeout=3)
+                with self.assertRaises(ct.CTraderError):
+                    await cli.request(ct.PT_GET_TRENDBARS_REQ, {},
+                                      timeout=3)
+                # An unrelated failure must NOT drop the session.
+                self.assertFalse(ws._closed)
+                self.assertEqual(cli._last_session_kick, 0)
+                await cli.stop()
+
+        run(scenario())
+
     def test_events_reach_handlers(self):
         ws = FakeWS()
         received = []

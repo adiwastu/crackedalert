@@ -16,6 +16,7 @@ import itertools
 import json
 import logging
 import ssl
+import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import websockets
@@ -58,6 +59,17 @@ PT_GET_ACCOUNT_LIST_RES = 2150
 
 HEARTBEAT_INTERVAL = 8.0        # server requires <=10s
 BACKOFF_START = 1.0
+
+# The gateway can kill an account session server-side while the websocket
+# itself stays open (sessions expire; nothing pushes the news). Every
+# account-scoped request then fails with "Trading account is not
+# authorized" and nothing on our side re-authenticates, because account
+# auth only runs on (re)connect. On that rejection the client drops the
+# socket so the runner reconnects and re-authenticates. Throttled: a
+# burst of failing requests must not spam reconnect cycles.
+SESSION_KICK_MIN_SECONDS = 30.0
+
+DEAD_SESSION_MARKER = "trading account is not authorized"
 BACKOFF_CAP = 60.0
 REQUEST_TIMEOUT = 10.0
 # Refresh the access token after this many consecutive reconnect
@@ -75,6 +87,16 @@ class CTraderError(Exception):
         self.error_code = error_code
         self.description = description
         super().__init__("%s: %s" % (error_code, description))
+
+
+def is_dead_account_session(error: CTraderError) -> bool:
+    """True when an error response means the account session is gone.
+
+    The websocket and app auth can both be perfectly alive while the
+    account session expired server-side; the gateway then rejects every
+    account-scoped request with this exact line.
+    """
+    return DEAD_SESSION_MARKER in error.description.lower()
 
 
 class NotConnected(Exception):
@@ -109,6 +131,7 @@ class CTraderClient:
         # (payloadType, clientMsgId, payload keys) of the last few frames;
         # dumped into timeout errors so a silent gateway is diagnosable.
         self._recent_frames = collections.deque(maxlen=10)
+        self._last_session_kick = 0.0
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -136,6 +159,20 @@ class CTraderClient:
         cycling on its own and picks the new tokens up there."""
         if self._ws is not None:
             await self._ws.close()
+
+    async def kick_session(self) -> None:
+        """Drop the session after a dead-account-session rejection.
+
+        Throttled so a burst of failing requests (the candle poll alone
+        issues one per key) collapses into one reconnect cycle."""
+        now = time.monotonic()
+        if now - self._last_session_kick < SESSION_KICK_MIN_SECONDS:
+            return
+        self._last_session_kick = now
+        log.warning("[%s] account session rejected by the gateway -- "
+                    "dropping the socket to reconnect and re-authenticate",
+                    self.environment)
+        await self.force_reconnect()
 
     async def wait_ready(self, timeout: float = 30.0) -> None:
         await asyncio.wait_for(self._ready.wait(), timeout)
@@ -173,8 +210,13 @@ class CTraderClient:
         observed dropping a request sent while another is outstanding.
         """
         async with self._req_lock:
-            return await self._request_unlocked(payload_type, payload,
-                                                timeout)
+            try:
+                return await self._request_unlocked(payload_type, payload,
+                                                    timeout)
+            except CTraderError as e:
+                if is_dead_account_session(e):
+                    await self.kick_session()
+                raise
 
     async def _request_unlocked(self, payload_type: int, payload: dict,
                                 timeout: float) -> Tuple[int, dict]:
