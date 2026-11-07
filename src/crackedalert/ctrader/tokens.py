@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Callable, Optional
@@ -24,6 +25,30 @@ CHECK_INTERVAL_SECONDS = 86400         # daily
 
 class TokenError(Exception):
     pass
+
+
+class TokenTransientError(Exception):
+    """The token endpoint itself is failing (Spotware-side 5xx / network
+    down). The stored grant is untouched, so this is NOT a dead token:
+    callers must keep retrying and must not page the operator."""
+
+
+# Spotware's endpoint answers JSON {"errorCode": <int>, "description"}.
+# 5xx errorCodes (and their phrasing) are server-side failures; grant
+# rejections come back as other codes/wording entirely.
+_TRANSIENT_MARKERS = ("bad gateway", "service unavailable",
+                      "gateway timeout", "internal server error")
+
+
+def _transient_rejection(answer: dict) -> bool:
+    try:
+        code = int(answer.get("errorCode") or 0)
+    except (TypeError, ValueError):
+        code = 0
+    if 500 <= code < 600:
+        return True
+    description = str(answer.get("description", "")).lower()
+    return any(marker in description for marker in _TRANSIENT_MARKERS)
 
 
 class TokenStore:
@@ -76,13 +101,23 @@ class TokenStore:
         }).encode()
         req = urllib.request.Request(TOKEN_URL, data=body, method="POST")
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            answer = json.loads(resp.read().decode())
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                answer = json.loads(resp.read().decode())
+        except (urllib.error.URLError, OSError) as e:
+            # Endpoint unreachable: the grant is intact, the network or
+            # Spotware is down. Retry territory, never a dead token.
+            raise TokenTransientError(
+                "token endpoint unreachable: %s" % e) from e
 
         access = answer.get("accessToken") or answer.get("access_token")
         refresh = answer.get("refreshToken") or answer.get("refresh_token")
         expires = answer.get("expiresIn") or answer.get("expires_in")
         if not access or not refresh:
+            if _transient_rejection(answer):
+                raise TokenTransientError(
+                    "refresh rejected (Spotware-side): %s"
+                    % json.dumps(answer))
             raise TokenError("refresh rejected: %s" % json.dumps(answer))
 
         data = {
@@ -150,11 +185,19 @@ class TokenStore:
             self,
             on_failure: Optional[Callable[[str], "asyncio.Future"]] = None
     ) -> None:
-        """Daily check; refresh when close to expiry. Run as a task."""
+        """Daily check; refresh when close to expiry. Run as a task.
+
+        Transient failures (Spotware 5xx, network down) are logged and
+        retried next cycle -- never paged to the operator, and always
+        followed by the sleep: a zero-yield retry loop here would starve
+        the event loop (cancellation could never be delivered)."""
         while True:
             try:
                 if self.needs_refresh():
                     await self.refresh()
+            except TokenTransientError as e:
+                log.warning("token refresh unavailable (transient, will "
+                            "retry next cycle): %s", e)
             except Exception as e:
                 log.error("token refresh failed: %s", e)
                 if on_failure is not None:
@@ -218,6 +261,11 @@ def make_selfheal_refresh(
     async def selfheal_refresh() -> None:
         try:
             await store.refresh()
+        except TokenTransientError as e:
+            # Server-side failure: the grant is intact, the reconnect
+            # cycle retries on its own. Page nobody.
+            log.warning("token refresh unavailable (transient): %s", e)
+            raise
         except Exception as e:
             now = time.monotonic()
             if now - last["at"] >= min_interval:

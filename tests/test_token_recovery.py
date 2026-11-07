@@ -5,6 +5,11 @@ Regression context: on 2026-10-03 cTrader revoked the bot's grant while
 idle (the refresh token died unused), and the bot had no way to tell the
 operator or to recover without SSH. These cover the pieces that make the
 recovery chat-driven.
+
+2026-11-07 addition: Spotware's token endpoint answered 502 for hours
+and the bot paged "tokens are dead" -- a false alarm. Server-side 5xx
+and unreachable endpoints are now TokenTransientError: retried
+quietly, never paged. Only a true grant rejection pages.
 """
 
 import asyncio
@@ -112,6 +117,116 @@ class ExchangeCodeTest(unittest.TestCase):
         with open(self.path) as f:
             self.assertEqual(json.load(f)["refreshToken"], "old-r")
 
+    def test_502_rejection_is_transient_not_dead(self):
+        async def scenario():
+            with mock.patch("urllib.request.urlopen",
+                            return_value=_FakeResp({"errorCode": 502,
+                                                    "description":
+                                                    "Bad Gateway"})):
+                with self.assertRaises(tok.TokenTransientError):
+                    await self.store.refresh()
+                # Stored grant untouched.
+                self.assertEqual(self.store.access_token, "old-a")
+
+        asyncio.run(scenario())
+
+    def test_unreachable_endpoint_is_transient_not_dead(self):
+        import urllib.error
+
+        async def scenario():
+            with mock.patch("urllib.request.urlopen",
+                            side_effect=urllib.error.URLError(
+                                "connection refused")):
+                with self.assertRaises(tok.TokenTransientError):
+                    await self.store.refresh()
+
+        asyncio.run(scenario())
+
+    def test_transient_refresh_does_not_page_the_operator(self):
+        async def scenario():
+            calls = {"n": 0}
+
+            async def failing_refresh():
+                raise tok.TokenTransientError("refresh rejected "
+                                              "(Spotware-side)")
+
+            async def on_dead(e):
+                calls["n"] += 1
+
+            refresh = tok.make_selfheal_refresh(
+                mock.Mock(refresh=failing_refresh), on_dead,
+                min_interval=3600)
+            for _ in range(3):
+                with self.assertRaises(tok.TokenTransientError):
+                    await refresh()
+            self.assertEqual(calls["n"], 0)
+
+        asyncio.run(scenario())
+
+    def test_grant_rejection_still_pages_the_operator(self):
+        async def scenario():
+            calls = {"n": 0}
+
+            async def failing_refresh():
+                raise tok.TokenError("refresh rejected: "
+                                     '{\"errorCode\": \"INVALID_GRANT\"}')
+
+            async def on_dead(e):
+                calls["n"] += 1
+
+            refresh = tok.make_selfheal_refresh(
+                mock.Mock(refresh=failing_refresh), on_dead,
+                min_interval=3600)
+            with self.assertRaises(tok.TokenError):
+                await refresh()
+            self.assertEqual(calls["n"], 1)
+
+        asyncio.run(scenario())
+
+    def test_refresh_loop_skips_on_failure_for_transient(self):
+        """A Spotware-side 502 must not page the operator: refresh_loop
+        logs it and keeps cycling. One iteration, then a long sleep the
+        test cancels cleanly -- no tight retry loop."""
+        old_interval = tok.CHECK_INTERVAL_SECONDS
+        tok.CHECK_INTERVAL_SECONDS = 3600
+
+        async def failing_refresh(self_store):
+            raise tok.TokenTransientError("502")
+
+        class LoopStore:
+            refresh_loop = tok.TokenStore.refresh_loop
+
+            def needs_refresh(self):
+                return True
+
+            refresh = failing_refresh
+
+        async def scenario():
+            pages = {"n": 0}
+
+            async def on_failure(reason):
+                pages["n"] += 1
+
+            store = LoopStore()
+            task = asyncio.get_running_loop().create_task(
+                store_loop_guard(store, on_failure))
+            try:
+                # Let exactly one iteration run, then park it in the
+                # long inter-check sleep.
+                await asyncio.sleep(0.05)
+                self.assertEqual(pages["n"], 0)
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        try:
+            asyncio.run(scenario())
+        finally:
+            tok.CHECK_INTERVAL_SECONDS = old_interval
+
     def test_concurrent_refreshes_share_one_http_call(self):
         """The live and demo clients can hit their self-heal in the same
         second. The refresh token is single-use: two concurrent rotations
@@ -148,7 +263,9 @@ class ExchangeCodeTest(unittest.TestCase):
         async def scenario():
             with mock.patch("urllib.request.urlopen",
                             side_effect=fake_urlopen):
-                with self.assertRaises(OSError):
+                # A network failure is transient since the 2026-11-07
+                # Spotware outage: wrapped, retried, never a dead token.
+                with self.assertRaises(tok.TokenTransientError):
                     await self.store.refresh()
                 state["fail"] = False
                 await self.store.refresh()
@@ -211,6 +328,14 @@ class SelfhealRefreshTest(unittest.TestCase):
             self.assertEqual(calls["n"], 0)
 
         asyncio.run(scenario())
+
+
+async def store_loop_guard(store, on_failure):
+    """refresh_loop wrapped with a guard so tests can cancel it."""
+    try:
+        await store.refresh_loop(on_failure=on_failure)
+    except asyncio.CancelledError:
+        pass
 
 
 if __name__ == "__main__":
